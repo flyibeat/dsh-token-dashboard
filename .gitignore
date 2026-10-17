@@ -3,6 +3,9 @@
 scan-cache.json
 scan-cache.json.tmp
 server.log
+service.out.log
+service.err.log
+*.log
 
 packaging/_build/
 packaging/*.spec
@@ -12,6 +15,9 @@ build/
 __pycache__/
 *.py[cod]
 *.pyo
+
+# 版本快照：由 versions/snapshot.py 生成，属本机存档，不进仓库
+versions/v*/
 
 # 本机记忆文件：内容含本机绝对路径，不入库
 AGENTS.md

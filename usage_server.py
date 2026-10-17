@@ -821,6 +821,24 @@ def html_mtime():
         return 0
 
 
+def _frontend_ver():
+    """从 dashboard.html 里读出 FE_VER，只给 `--version` 与启动日志用。
+
+    为什么要有这个：打包成 exe 后前端是内嵌的，`--version` 只打后端版本时
+    根本分不出「这个 exe 里的前端是哪一版」。读不到就报 unknown，不影响主流程。
+    """
+    try:
+        with open(html_path(), 'r', encoding='utf-8') as fh:
+            for line in fh:
+                if 'FE_VER' in line and '=' in line:
+                    v = line.split('=', 1)[1].strip().strip(';').strip().strip("'\"")
+                    if v:
+                        return v
+    except Exception:
+        pass
+    return 'unknown'
+
+
 def load_html():
     """前端页面独立存放，改动后只要存盘 + 刷新浏览器即生效，不必重启服务。"""
     try:
@@ -929,7 +947,8 @@ def _pause_if_interactive():
 def main():
     global PORT
     if '--version' in ARGV or '-V' in ARGV:
-        print('dsh-usage %s' % BE_VER)
+        # 同时打出前后端两个版本：打包成 exe 后前端被内嵌，光看 exe 名字分不出前端是哪版。
+        print('dsh-usage %s (frontend %s)' % (BE_VER, _frontend_ver()))
         return
     if '--port' in ARGV:
         try:

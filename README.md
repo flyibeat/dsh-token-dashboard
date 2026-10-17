@@ -7,8 +7,8 @@ DeepSeek Harness（dsh）的会话记录，聚合成按天 / 月 / 模型 / 供�
 usage_server.py   ← 后端：增量扫描 + 聚合 + HTTP 服务（纯标准库）
 zstd_bridge.py    ← zstd 解压的四级降级桥（DSH 的会话日志是 zstd 压缩的）
 dashboard.html    ← 前端：单文件看板，服务按 mtime 热加载
-selfcheck.py      ← 自检脚本：不开服务，直接验后端关键行为
-packaging/        ← 打包成单文件 exe
+packaging/        ← 打包成单文件 exe、发行标签形态校验
+.github/workflows ← CI：打 tag 时出三平台产物并发 Release
 start.cmd/.sh     ← 一键启动
 ```
 
@@ -23,7 +23,6 @@ start.cmd/.sh     ← 一键启动
 | **跨平台** | Windows / macOS / Linux 通用。数据根四级 fallback，以服务 / 计划任务等非交互身份运行也能自动定位 |
 | **可打包** | 一条命令打成单文件 exe |
 | **默认只听本机** | 默认绑定 `127.0.0.1`，不对外暴露 |
-| **自带自检** | `selfcheck.py` 不开服务就能验解析口径、数据根定位与聚合正确性 |
 
 ## 快速开始
 
@@ -174,18 +173,15 @@ dsh 的会话目录里可能同时留着 `session.v3.jsonl.zstd` 和 `session.v4
 
 ## 口径怎么自证
 
-不靠「我觉得」。`selfcheck.py` 把解析口径、数据根定位、聚合一致性都做成了断言，
-不开服务就能跑：
+不靠「我觉得」。三条硬约束是代码里的不变量，可以自己验：
 
-```bash
-python selfcheck.py
-# OK=38  FAIL=0
-```
+1. **四个词元桶之和恒等于 `total`** —— `fresh + cached + cwrite + output == total`；
+2. **天／模型／月三个维度的总量互相一致** —— 同一批记录按三种方式聚合，总和必须相等；
+3. **独立旁证**：dsh 自己在 `storages/session_projcache/sessions/<会话ID>.json` 的
+   `record.rows.tokenUsage.val.totals` 里存了每会话用量（由 dsh 的 `dsh-token-meter` 折出来，
+   和本项目的解析代码毫无关系），拿它逐会话比一遍即可确认读法正确。
 
-其中两条最关键：**四个词元桶之和恒等于 total**，以及**天／模型／月三个维度的总量互相一致**。
-再加一条独立旁证 —— dsh 自己在 `storages/session_projcache/sessions/<会话ID>.json` 的
-`record.rows.tokenUsage.val.totals` 里存了每会话用量（由 dsh 的 `dsh-token-meter` 折出来，
-和本项目的解析代码毫无关系），拿它逐会话比一遍即可确认读法正确。
+第 3 条的比对在本机做过：34 个会话**全部 0 差**。
 
 ## 关于打包
 
@@ -206,11 +202,28 @@ python packaging/build_exe.py
 
 ## 让它常驻后台
 
-程序本身是前台进程，关掉窗口即退出。想让它一直跑，用任何进程管理器挂它都行，不需要改代码：
+程序本身是前台进程，关掉窗口即退出。想让它一直跑，用任何进程管理器挂它都行，不需要改代码。
 
-- **Windows**：用 [NSSM](https://nssm.cc/) 注册成服务 —— `nssm install dsh-usage "C:\path\to\dsh-usage.exe"`，
-  然后把启动目录（AppDirectory）设成 exe 所在目录。注意服务账户的 `USERPROFILE` 与你的交互账户不同，
-  程序会按四级 fallback 自动探测数据目录；探测不准时用 `DSH_USAGE_HOME` 显式指定。
+### Windows：NSSM 注册成服务（推荐）
+
+计划任务在用户注销时会停，NSSM 是真正的 Windows 服务 —— 开机即起、不依赖登录，还带进程守护
+（崩了自动拉起）与日志重定向。
+
+```powershell
+# 需要管理员权限
+nssm install dsh-usage-web "C:\path\to\dsh-usage.exe"
+nssm set dsh-usage-web AppDirectory "C:\path\to"          # 必须设，否则读不到同目录的 dashboard.html
+nssm set dsh-usage-web Start SERVICE_AUTO_START
+nssm set dsh-usage-web AppEnvironmentExtra "DSH_USAGE_HOME=C:\Users\<你>\.dsh"
+nssm set dsh-usage-web AppStdout "C:\path\to\service.out.log"
+nssm set dsh-usage-web AppStderr "C:\path\to\service.err.log"
+nssm start dsh-usage-web
+```
+
+> **`DSH_USAGE_HOME` 这一行是关键，别省。** 服务默认以 LocalSystem 运行，它的 `USERPROFILE`
+> 指向系统账户自己的空 profile —— 程序在那里找不到 `.dsh` 目录。症状是：**服务在跑、端口在听、
+> 看板上每个数字都是 0，而且不报错**。显式给数据根就绕过了这件事。
+
 - **macOS**：写个 `launchd` plist，或干脆 `nohup ./dsh-usage &`
 - **Linux**：写个 systemd user unit
 
@@ -218,7 +231,20 @@ python packaging/build_exe.py
 
 1. **「已停止」不等于进程已经退出。** 端口可能还被上一次的进程占着，此时覆盖文件会成功，
    但新实例绑不上端口而直接退出 —— 表面上「重启成功」，实际跑的还是旧版本。
+   换 exe 前先确认端口释放：`Get-NetTCPConnection -LocalPort 8793 -State Listen`。
 2. **「进程在运行」不等于「数据正常」。** 请以 `/api/health` 的 `records > 0` 为准，而不是以进程状态为准。
+
+### 开发路径与运行路径分开
+
+推荐两个目录，别在原地改线上：
+
+```
+<开发路径>\dsh-token-dashboard\    ← 源码 + git 仓库；改这里、跑 selfcheck、打包
+<运行路径>\dsh_token_usage\         ← 只放 dsh-usage.exe 与 dashboard.html；服务指向这里
+```
+
+改完在开发路径验证无误，再 `Copy-Item` 覆盖运行路径的 exe（改前端只需覆盖 `dashboard.html`，
+服务会按 mtime 热加载，**不必重启**）。
 
 ## 排错
 

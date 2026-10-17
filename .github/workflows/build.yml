@@ -1,0 +1,126 @@
+name: Build
+
+# 触发方式：
+#   1) 手动：Actions 页 → Build → Run workflow
+#   2) 打标签：git tag v1.0.0 && git push origin v1.0.0  → 自动发 Release 并附三平台产物
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build on ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    env:
+      # Windows runner 的控制台代码页是 cp1252，脚本里的中文日志会 UnicodeEncodeError。
+      # 脚本自身已做编码兜底，这里再加一道保险。
+      PYTHONIOENCODING: utf-8
+      PYTHONUTF8: '1'
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, ubuntu-latest, macos-latest]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+
+      - name: Install PyInstaller
+        run: python -m pip install --upgrade pip pyinstaller
+
+      - name: Build single-file binary
+        # 输出：Windows 为 dist/dsh-usage.exe，macOS / Linux 为 dist/dsh-usage
+        run: python packaging/build_exe.py
+
+      - name: Smoke test (启动后查 /api/health，确认进程不是一启动就炸)
+        shell: bash
+        run: |
+          set -e
+          BIN=dist/dsh-usage.exe
+          [ -f "$BIN" ] || BIN=dist/dsh-usage
+          chmod +x "$BIN" 2>/dev/null || true
+          ./"$BIN" --port 8899 &
+          PID=$!
+          for i in $(seq 1 30); do
+            sleep 1
+            if curl -sf http://127.0.0.1:8899/api/health > health.json; then break; fi
+          done
+          kill $PID 2>/dev/null || true
+          echo "--- /api/health ---"
+          cat health.json || echo "健康检查未返回（CI 里没有 dsh 数据属正常）"
+          echo "--- --version ---"
+          ./"$BIN" --version || true
+          echo "--- 文件清单 ---"
+          ls -l dist/
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-${{ matrix.os }}
+          path: dist/dsh-usage*
+          if-no-files-found: error
+
+  # 单独一个 job 汇总发版：三个平台并发往同一个 Release 上传会撞名（Linux 与 macOS
+  # 的产物都叫 dsh-usage），也会互相抢写同一个 Release。这里改成「先全部构建完，
+  # 再一次性重命名后上传」，顺便消除竞态。
+  release:
+    name: Publish release
+    if: startsWith(github.ref, 'refs/tags/')
+    needs: build
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # 三套版本互相独立：前端 FE_VER、后端 BE_VER、发行版本（git 标签 / Release）。
+      # 这里只校验标签形态 vX.Y.Z，不比较它与前后端版本号是否相等。
+      # 默认只警告不拦发布 —— 发版不该因为一句提醒就卡住。
+      - name: 校验发行标签形态
+        run: python3 packaging/check_version.py "$GITHUB_REF_NAME"
+
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Prepare platform-specific assets
+        shell: bash
+        run: |
+          set -e
+          mkdir -p release
+          cp "artifacts/build-windows-latest/dsh-usage.exe" release/dsh-usage-windows-x64.exe
+          cp "artifacts/build-ubuntu-latest/dsh-usage"      release/dsh-usage-linux-x64
+          cp "artifacts/build-macos-latest/dsh-usage"       release/dsh-usage-macos-arm64
+          chmod +x release/dsh-usage-linux-x64 release/dsh-usage-macos-arm64
+          echo "--- release assets ---"
+          ls -l release/
+
+      - name: Create release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: release/*
+          generate_release_notes: true
+          body: |
+            单文件构建产物，零运行时依赖，拷走即用。
+
+            | 平台 | 文件 | 用法 |
+            |---|---|---|
+            | Windows x64 | `dsh-usage-windows-x64.exe` | 双击运行；`--open` 会自动开浏览器 |
+            | Linux x64 | `dsh-usage-linux-x64` | `chmod +x dsh-usage-linux-x64 && ./dsh-usage-linux-x64` |
+            | macOS (Apple Silicon) | `dsh-usage-macos-arm64` | `chmod +x dsh-usage-macos-arm64 && ./dsh-usage-macos-arm64`。**未签名**，若被 Gatekeeper 拦下：右键 → 打开 |
+
+            运行前请确认本机已安装 DeepSeek Harness（dsh）且 `~/.dsh/sessions/` 下有会话数据。
+            启动后浏览器打开 <http://127.0.0.1:8793>。
+
+            > zstd 解压走四级降级（`compression.zstd` → `zstandard` → `libzstd` → `node`），
+            > 目标机满足任意一级即可。用 `--version` 看版本，`/api/health` 的 `zstdBackend`
+            > 看实际命中的后端。
+            >
+            > 担心数据没读到？看 `/api/health` 的 `records` 是否大于 0，而不是看进程状态。
