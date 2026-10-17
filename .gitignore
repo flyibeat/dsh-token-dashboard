@@ -13,7 +13,7 @@ __pycache__/
 *.py[cod]
 *.pyo
 
-# 本机记忆文件：内容含本机绝对路径（如 D:\DSH_Data\...），不入库
+# 本机记忆文件：内容含本机绝对路径，不入库
 AGENTS.md
 AGENTS.local.md
 CLAUDE.md
