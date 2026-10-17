@@ -210,7 +210,7 @@ python packaging/build_exe.py
 （崩了自动拉起）与日志重定向。
 
 ```powershell
-# 需要管理员权限
+# 需要管理员权限（nssm install 会建出服务，但后续 nssm set 没有管理员会被拒：Can't open service!）
 nssm install dsh-usage-web "C:\path\to\dsh-usage.exe"
 nssm set dsh-usage-web AppDirectory "C:\path\to"          # 必须设，否则读不到同目录的 dashboard.html
 nssm set dsh-usage-web Start SERVICE_AUTO_START
@@ -220,9 +220,23 @@ nssm set dsh-usage-web AppStderr "C:\path\to\service.err.log"
 nssm start dsh-usage-web
 ```
 
-> **`DSH_USAGE_HOME` 这一行是关键，别省。** 服务默认以 LocalSystem 运行，它的 `USERPROFILE`
-> 指向系统账户自己的空 profile —— 程序在那里找不到 `.dsh` 目录。症状是：**服务在跑、端口在听、
-> 看板上每个数字都是 0，而且不报错**。显式给数据根就绕过了这件事。
+> ### ⚠️ `DSH_USAGE_HOME` 这一行是关键，别省
+>
+> 服务默认以 **LocalSystem** 账户运行，而 **LocalSystem 的 `USERPROFILE` 不是你的用户目录**，
+> 它指向系统账户自己的空 profile（`C:\Windows\system32\config\systemprofile`）。
+> 程序按四级 fallback 探测数据根时，在那里**找不到 `.dsh` 目录**。
+>
+> **症状非常迷惑**：服务状态是 RUNNING、端口在听、页面能打开、日志里一行错误都没有，
+> 但**看板上每个数字都是 0**。因为它成功启动了，只是扫到了 0 个会话文件。
+>
+> **修法**（二选一）：
+>
+> - 设环境变量（推荐）：`nssm set dsh-usage-web AppEnvironmentExtra "DSH_USAGE_HOME=C:\Users\<你>\.dsh"`
+> - 或改服务账户为你自己的账户，让 `USERPROFILE` 正常（但那样就要求该用户一直有登录会话，失去服务化的意义）
+>
+> **怎么确认是否命中这个坑**：不要看进程状态，看接口 ——
+> `curl http://127.0.0.1:8793/api/health` 的 `records` 是否大于 0，以及 `dataRoot`
+> 有没有展开成真实路径（展开失败时它是字面量 `~\.dsh`）。
 
 - **macOS**：写个 `launchd` plist，或干脆 `nohup ./dsh-usage &`
 - **Linux**：写个 systemd user unit
@@ -250,6 +264,22 @@ nssm start dsh-usage-web
 
 ### 页面能打开，但所有数字都是 0
 
+这是最常见的故障，**而且有两种性质完全不同、症状却一模一样的成因**，先分清是哪一种：
+
+**成因 A：以服务方式运行，服务账户读不到你的 `.dsh`**（最常见）
+
+见上文「让它常驻后台」里那段 ⚠️ —— LocalSystem 的 `USERPROFILE` 指向系统空 profile。
+**判据**：`/api/health` 的 `dataRootSource` 显示「回退默认」或 `dataRoot` 没展开成真实路径
+（是字面量 `~\.dsh`），`records=0` 且 `files=0` 且 `error=null`。
+
+```powershell
+# 加固
+nssm set dsh-usage-web AppEnvironmentExtra "DSH_USAGE_HOME=C:\Users\<你>\.dsh"
+nssm restart dsh-usage-web
+```
+
+**成因 B：交互式运行时数据根真的没定位对**
+
 **先看 `/api/health` 的 `dataRoot` 有没有展开成真实路径**，别急着查端口：
 
 ```bash
@@ -259,6 +289,9 @@ curl http://127.0.0.1:8793/api/health
 ```
 
 若日志里出现自检块，它已经列出了全部候选项和修法。
+
+> **共同点**：这两种情况下进程都是健康的、端口都在听、日志都不报错。
+> 所以**永远以 `/api/health` 的 `records > 0` 为准，不要以进程/服务状态为准**。
 
 ### 报 zstd 不可用 / 解压失败
 
