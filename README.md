@@ -7,7 +7,7 @@ DeepSeek Harness（dsh）的会话记录，聚合成按天 / 月 / 模型 / 供�
 usage_server.py   ← 后端：增量扫描 + 聚合 + HTTP 服务（纯标准库）
 zstd_bridge.py    ← zstd 解压的四级降级桥（DSH 的会话日志是 zstd 压缩的）
 dashboard.html    ← 前端：单文件看板，服务按 mtime 热加载
-reconcile.py      ← 对账工具：与 dsh-usage 插件账本逐日逐模型比对
+selfcheck.py      ← 自检脚本：不开服务，直接验后端关键行为
 packaging/        ← 打包成单文件 exe
 start.cmd/.sh     ← 一键启动
 ```
@@ -23,7 +23,7 @@ start.cmd/.sh     ← 一键启动
 | **跨平台** | Windows / macOS / Linux 通用。数据根四级 fallback，以服务 / 计划任务等非交互身份运行也能自动定位 |
 | **可打包** | 一条命令打成单文件 exe |
 | **默认只听本机** | 默认绑定 `127.0.0.1`，不对外暴露 |
-| **自带对账** | 与 `@linxin666/dsh-usage` 插件的账本交叉核对，并用 DSH 自己的投影缓存证明解析正确 |
+| **自带自检** | `selfcheck.py` 不开服务就能验解析口径、数据根定位与聚合正确性 |
 
 ## 快速开始
 
@@ -42,13 +42,14 @@ python usage_server.py
 
 ## 数据来源
 
-程序只读三处，**全部位于 dsh 的数据目录**（默认 `~/.dsh`）：
+程序只读两处，**全部位于 dsh 的数据目录**（默认 `~/.dsh`）：
 
 | 来源 | 用途 | 取哪些字段 |
 |---|---|---|
 | `sessions/<工作区>/<会话ID>/session.v<N>.jsonl.zstd` | 逐条累计用量 | 只取 `assistant/message` 事件的 `data.usage`（`inputTokens` / `outputTokens` / `cacheReadTokens` / `cacheWriteTokens`）、`data.message.source`（`provider` / `model`）、`time` |
 | `storages/session_projcache/sessions/<会话ID>.json` | 补会话标题与工作目录 | `record.rows.title.val`、`record.identity.cwd`。**不读 `titleInput` 等含正文的键** |
-| `dsh-usage/usage-ledger.json` | 仅用于对账 | 第三方插件 `@linxin666/dsh-usage` 的账本。**不参与主统计** |
+
+不需要装任何插件，也不读取第三方插件的任何文件。
 
 > **缓存里存什么**：`scan-cache.json` 只存 `{绝对路径: {"sig": [mtime, size], "recs": [[数字…]]}}` ——
 > 纯数字数组，**连会话标题与 cwd 都不落盘**。
@@ -171,41 +172,20 @@ dsh 的会话目录里可能同时留着 `session.v3.jsonl.zstd` 和 `session.v4
 它们是**同一次会话在不同格式版本下的副本**，不是两段用量。程序对每个会话目录只取
 版本号最高的那份。本机 39 个会话目录里有 1 个同时有 v3+v4，不去重就会重复累加。
 
-## 为什么以转录为准（而不是拿 dsh-usage 的账本当数据源）
+## 口径怎么自证
 
-`@linxin666/dsh-usage` 插件会维护一份 `~/.dsh/dsh-usage/usage-ledger.json`，看起来
-很适合直接当数据源。但它**不是完整账本**：
+不靠「我觉得」。`selfcheck.py` 把解析口径、数据根定位、聚合一致性都做成了断言，
+不开服务就能跑：
 
-- 它只记录**插件运行期间实时看到**的请求。插件装上之前的历史、Host 重启期间的请求，一概没有；
-- 它默认只保留 **180 天**（`retainDays`）；
-- 它按「插件收到事件的时刻」的本地日期归日，跨零点的长会话会被分到不同天。
-
-而会话转录是 dsh 写下来的**完整事实**，包含全部历史。所以本看板**以转录为准**。
-
-> **页面上不再显示对账条。** 早先版本会在页面顶部挂一条「本看板 X 词元／账本 Y 词元」
-> 的提示，但它对日常使用没有价值、还容易被误读成「数字有问题」，已移除。
-> 想看两套口径的差异，跑下面的 `reconcile.py` —— 那是按需调用的命令行工具，
-> 不占页面、也不参与任何展示数字。
-
-### 怎么证明转录口径是对的
-
-不靠「我觉得」。用 dsh **自己**算的数来对照：`storages/session_projcache/sessions/<会话ID>.json`
-里的 `record.rows.tokenUsage.val.totals` 是 dsh 的 `dsh-token-meter` 插件折出来的每会话用量，
-**和本项目的解析代码毫无关系**。逐会话比一遍就能判定差异在哪一侧：
-
-```
-$ python reconcile.py --days
-权威对照（DSH 自己的 tokenUsage 投影缓存）：
-  比对 34 个会话，不一致 0 个 —— 转录解析与 DSH 内部一致
-  （另有 1 个**正在进行中**的会话略高，是 projcache 还没写到最新，属正常）
-
-总量  转录 122,820,378   /   账本 89,014,346   /   差 33,806,032
+```bash
+python selfcheck.py
+# OK=38  FAIL=0
 ```
 
-本机实测：34 个会话**全部 0 差**。所以那 33.8M 的差额确实是账本漏收，不是这边算错。
-
-`reconcile.py` 还能把差异定位到具体哪一天、哪个供应商、哪个模型（`--all` 列全部，`--days` 只看按天）。
-它是个**独立工具**：不启动服务、不影响看板、不改任何展示数字。
+其中两条最关键：**四个词元桶之和恒等于 total**，以及**天／模型／月三个维度的总量互相一致**。
+再加一条独立旁证 —— dsh 自己在 `storages/session_projcache/sessions/<会话ID>.json` 的
+`record.rows.tokenUsage.val.totals` 里存了每会话用量（由 dsh 的 `dsh-token-meter` 折出来，
+和本项目的解析代码毫无关系），拿它逐会话比一遍即可确认读法正确。
 
 ## 关于打包
 
@@ -303,11 +283,12 @@ Get-NetTCPConnection -LocalPort 8793 -State Listen | ForEach-Object {
 | 缓存命中字段 | `prompt_cache_hit_tokens`，另有 `prompt_tokens_details.cached_tokens` 兜底 | `cacheReadTokens` / `cacheWriteTokens` 两个独立字段 |
 | 模型名 | 三个字段来回漂移，还要剥 `custom-local:` 前缀、识别 `auto` 等档位词 | `message.source.model`，直取即可 |
 | 积分/计费 | 有「积分」口径（1 积分 ≈ ¥0.07） | **已移除** —— dsh 不记积分，也不在转录里记费用 |
-| 对账来源 | `workbuddy.db` 的 `session_usage.credit_json` | `dsh-usage` 账本 + **DSH 自己的 tokenUsage 投影缓存**（后者是硬证据） |
 | 数据根 | `~/.workbuddy` | `~/.dsh`（或 `$DSH_HOME`） |
 
 积分相关的卡片、列、排序键全部删掉了 —— dsh 转录里没有这个概念，留着只会显示一列恒为 0
-的假数据。想算钱请用 dsh 的定价表自己折算，或看 `@linxin666/dsh-usage` 插件那张价格卡。
+的假数据。
+
+对账相关的东西也一并删掉了：本项目只依赖 dsh 自己的会话转录，**不假设你装了任何第三方插件**。
 
 ## License
 

@@ -14,10 +14,6 @@
         会话投影缓存，取**标题**（rows.title.val）与**工作目录**（identity.cwd）。
         只有标题和目录，不含任何正文。
 
-    <数据根>/dsh-usage/usage-ledger.json
-        可选。第三方插件 `@linxin666/dsh-usage` 的账本，用作**对账**与**补缺**，
-        不参与主统计（详见 README 的「为什么以转录为准」）。
-
 启动：
     python usage_server.py
     浏览器打开 http://127.0.0.1:8793
@@ -227,8 +223,6 @@ if '--home' in ARGV:
 DSH, DSH_SOURCE, DSH_CANDIDATES = _resolve_data_root()
 SESSIONS = os.path.join(DSH, 'sessions')
 PROJCACHE = os.path.join(DSH, 'storages', 'session_projcache', 'sessions')
-LEDGER_DIR = os.path.join(DSH, 'dsh-usage')
-LEDGER = os.path.join(LEDGER_DIR, 'usage-ledger.json')
 
 
 def _exe_dir():
@@ -688,7 +682,6 @@ def agg(records):
         'sessions': sessions,
         'hours': hours,
         'recordCount': n,
-        'summary': current_usage_summary(ses),
     }
 
 
@@ -739,62 +732,6 @@ def load_session_meta(force=False):
     _meta_cache['map'] = out
     _meta_health.update(ok=True, error=None, at=now)
     return out
-
-
-def load_ledger():
-    """读第三方插件 `@linxin666/dsh-usage` 的账本，**只用于对账**。
-
-    返回 (账本或 None, 说明)。账本形状：
-        {"version":1,"days":{"YYYY-MM-DD":{"<provider>":{"<model>":{...}}}}}
-    """
-    if not os.path.exists(LEDGER):
-        return None, '未安装 dsh-usage 插件，无账本可比（不影响统计）'
-    try:
-        with open(LEDGER, 'r', encoding='utf-8') as fh:
-            o = json.load(fh)
-        if not isinstance(o, dict) or not isinstance(o.get('days'), dict):
-            return None, '账本结构不认识'
-        return o, None
-    except Exception as e:
-        return None, '账本读取失败：%r' % e
-
-
-def _ledger_totals(doc):
-    """把账本折成 {(日期, provider, model): 总词元} 与总量。"""
-    per = {}
-    if not doc:
-        return per
-    for day, provs in (doc.get('days') or {}).items():
-        if not isinstance(provs, dict):
-            continue
-        for prov, models in provs.items():
-            if not isinstance(models, dict):
-                continue
-            for model, t in models.items():
-                if not isinstance(t, dict):
-                    continue
-                try:
-                    tot = (float(t.get('inputTokens') or 0) + float(t.get('cacheReadTokens') or 0)
-                           + float(t.get('cacheWriteTokens') or 0) + float(t.get('outputTokens') or 0))
-                except Exception:
-                    continue
-                per[(day, prov, model)] = per.get((day, prov, model), 0.0) + tot
-    return per
-
-
-def current_usage_summary(ses):
-    """给 `/api/data` 附一个**只关于本看板自己**的汇总。
-
-    这里原本是和 dsh-usage 账本的对账块。那一块已经从页面上撤掉了（用户要求），
-    所以接口里不再附带账本读数 —— 每轮刷新少读一个文件，也不会再有
-    「页面上的数字和账本对不上」这类噪音。
-
-    真要对账请用 `reconcile.py`：它是独立命令行工具，把差异定位到哪一天 / 哪个
-    供应商 / 哪个模型，并用 DSH 自己的 tokenUsage 投影缓存做权威对照。
-    """
-    return {
-        'sessions': len(ses),
-    }
 
 
 # ---------------------------------------------------------------- 刷新线程
