@@ -1,0 +1,26 @@
+# 故意忽略运行时产物：缓存、日志、打包中间物、打包产物
+
+scan-cache.json
+scan-cache.json.tmp
+server.log
+
+packaging/_build/
+packaging/*.spec
+dist/
+build/
+
+__pycache__/
+*.py[cod]
+*.pyo
+
+# 本机记忆文件：内容含本机绝对路径（如 D:\DSH_Data\...），不入库
+AGENTS.md
+AGENTS.local.md
+CLAUDE.md
+CLAUDE.local.md
+
+# 编辑器 / 系统
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db

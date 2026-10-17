@@ -1,0 +1,1270 @@
+<!DOCTYPE html>
+<html lang="zh-CN"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>DeepSeek Harness 词元用量看板</title>
+<style>
+:root{
+  --bg:#f4f5f7;--card:#ffffff;--line:#e4e6eb;--line2:#eef0f3;
+  --tx:#1f2329;--tx2:#6b7280;--tx3:#9aa1ab;
+  --c-fresh:#3370ff;--c-cache:#a9c2ff;--c-out:#00b2b2;--c-write:#8b5cf6;
+  --blue:#3370ff;--red:#e5484d;--green:#16a34a;--amber:#f59e0b;
+  /* 会话标题列显示宽度（px），由表头把手拖拽调整，JS 会覆盖并在 localStorage 持久化 */
+  --sess-w:220px;
+}
+*{box-sizing:border-box}
+html,body{margin:0;padding:0}
+body{background:var(--bg);color:var(--tx);font-size:14px;line-height:1.6;
+  font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","Microsoft YaHei",sans-serif;
+  -webkit-font-smoothing:antialiased}
+/* 背景色带（蓝）：一层固定三色渐变 + 自上而下渐隐，只给纯色底加层次。
+   挂 body::before，不占布局、不吃点击；底色仍由 body 的 --bg 决定，这层只是叠色。 */
+body::before{content:'';position:fixed;inset:0 0 auto 0;height:100vh;height:100svh;
+  z-index:-1;pointer-events:none;
+  background:linear-gradient(115deg,rgba(37,99,235,.36) 0%,rgba(6,182,212,.30) 46%,rgba(59,130,246,.26) 100%);
+  -webkit-mask-image:linear-gradient(180deg,#000 0%,rgba(0,0,0,.84) 28%,rgba(0,0,0,.52) 58%,rgba(0,0,0,.22) 84%,transparent 100%);
+  mask-image:linear-gradient(180deg,#000 0%,rgba(0,0,0,.84) 28%,rgba(0,0,0,.52) 58%,rgba(0,0,0,.22) 84%,transparent 100%)}
+@media print{body::before{display:none}}
+.wrap{max-width:1220px;margin:0 auto;padding:26px 20px 64px}
+.hd{display:flex;align-items:flex-start;justify-content:space-between;gap:16px;flex-wrap:wrap;margin-bottom:20px}
+.hd h1{font-size:21px;margin:0 0 4px;font-weight:650;letter-spacing:-.2px}
+.hd .sub{color:var(--tx2);font-size:12.5px}
+.hd .sub code{background:#eceef1;padding:1px 5px;border-radius:4px;font-size:11.5px}
+.live{display:flex;align-items:center;gap:10px;font-size:12.5px;color:var(--tx2);
+  background:var(--card);border:1px solid var(--line);border-radius:9px;padding:8px 12px}
+.dot{width:7px;height:7px;border-radius:50%;background:var(--green);flex:none}
+.dot.err{background:var(--red)}
+.dot.busy{background:var(--amber);animation:pulse 1s infinite}
+@keyframes pulse{50%{opacity:.3}}
+.btn{border:1px solid var(--line);background:#fff;color:var(--tx);border-radius:6px;
+  padding:3px 11px;font-size:12.5px;cursor:pointer;font-family:inherit}
+.btn:hover{background:#f7f8fa;border-color:#d0d4da}
+.btn.on,.btn.primary{background:var(--blue);border-color:var(--blue);color:#fff}
+.btn.primary:hover{background:#2a63e8;border-color:#2a63e8}
+.tabs{display:flex;gap:6px;flex-wrap:wrap;align-items:center}
+.pick{position:relative;display:inline-block}
+.pop{position:absolute;top:calc(100% + 7px);left:0;z-index:40;background:#fff;border:1px solid var(--line);
+  border-radius:10px;padding:11px 12px 10px;box-shadow:0 10px 26px rgba(20,30,60,.16);display:none;min-width:200px}
+.pop.open{display:block}
+.pop .pl{font-size:11.5px;color:var(--tx2);margin:0 0 5px}
+.pop .pl+.pl{margin-top:10px}
+.pop input[type=date]{width:100%;padding:6px 8px;border:1px solid var(--line);border-radius:7px;
+  font-size:13px;font-family:inherit;color:var(--tx);background:#fff}
+.pop input[type=date]:focus{outline:none;border-color:var(--blue)}
+.pop .pa{margin-top:11px;display:flex;gap:7px;justify-content:flex-end}
+.pop .pa .btn{padding:4px 13px}
+.pop .pmsg{font-size:11.5px;color:var(--red);margin-top:7px}
+.pop .pmsg:empty{display:none}
+.pop .ph2{font-size:12.5px;font-weight:620;margin:0 0 8px}
+.cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(168px,1fr));gap:11px;margin-bottom:18px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:11px;padding:13px 15px 14px}
+.card .k{color:var(--tx2);font-size:12px;margin-bottom:5px}
+.card .v{font-size:23px;font-weight:640;font-variant-numeric:tabular-nums;letter-spacing:-.4px;line-height:1.25}
+.card .v .mn{font-size:14px;font-weight:500;color:var(--tx2);margin-left:3px}
+.card .h{font-size:11.5px;color:var(--tx3);margin-top:3px}
+.panel{background:var(--card);border:1px solid var(--line);border-radius:11px;
+  padding:15px 17px 17px;margin-bottom:16px}
+.panel .ph{display:flex;align-items:center;justify-content:space-between;gap:12px;
+  flex-wrap:wrap;margin-bottom:14px}
+.panel h2{font-size:14.5px;margin:0;font-weight:620}
+.panel h2 small{color:var(--tx3);font-weight:400;font-size:12px;margin-left:7px}
+.legend{display:flex;gap:14px;font-size:12px;color:var(--tx2);align-items:center;flex-wrap:wrap}
+.legend i{display:inline-block;width:9px;height:9px;border-radius:2px;margin-right:5px;vertical-align:-1px}
+/* 图表分两层：左列 Y 轴固定在视口里、不参与横向滚动，只有右侧绘图区滚。
+   否则拖到区间中段时刻度会跟着滚出屏幕。.chart 必须 min-width:0，
+   否则 flex 子项不肯收缩到内容宽以下，滚动条不会出现。 */
+.chartrow{display:flex;align-items:flex-start}
+.yaxis{flex:0 0 auto;overflow:hidden}
+.yaxis svg{display:block}
+/* 横向滚动条**走系统默认渲染**，不写任何 ::-webkit-scrollbar / scrollbar-width
+   自定义样式 —— 一旦自绘，宽度就被 CSS 写死，跟系统那套必然对不上。 */
+.chart{flex:1 1 auto;min-width:0;overflow-x:auto}
+.chart svg{display:block}
+.bar{transition:opacity .12s}
+.bar:hover{opacity:.78}
+table{width:100%;border-collapse:collapse;font-variant-numeric:tabular-nums}
+th,td{padding:7px 9px;border-bottom:1px solid var(--line2);text-align:right;font-size:13px;white-space:nowrap}
+th:first-child,td:first-child{text-align:left}
+th{color:var(--tx2);font-weight:500;font-size:11.5px;position:sticky;top:0;background:var(--card);z-index:2}
+th.help{cursor:help;text-decoration:underline dotted var(--tx3);text-underline-offset:3px}
+tbody tr:hover td{background:#f5f8ff}
+td.mono{font-family:ui-monospace,Consolas,monospace;font-size:12px}
+/* 会话标题列：一行里放「标题 + 短 ID」。
+   口径：--sess-w 表示**这一行的可用文字宽度**（标题 + 6px 间隔 + 短 ID 全算在内）。
+   实现方式是把那一行做成 flex，标题 .st 用 flex:1 吃掉剩余空间、超出即省略号，
+   短 ID .sid 用 flex:none 固定宽度。这样「文字被截断的位置」天然等于列的右边界，
+   把手（钉在列右边界）与截断点永远重合 —— 不会再出现「把手在这、截断在那」。
+   早先的写法是 .st 单独 max-width:--sess-w + .sid 并排，结果 .sid 的宽度不计入
+   --sess-w，列右边就多出一段谁都不占的空白（实测多出 67px）。 */
+td.sess .sline{display:flex;align-items:baseline;gap:6px;width:100%;min-width:0}
+td.sess .st{flex:1 1 auto;min-width:0;overflow:hidden;
+  text-overflow:ellipsis;white-space:nowrap}
+td.sess .sid{flex:0 0 auto;font-family:ui-monospace,Consolas,monospace;font-size:11px;color:var(--tx3)}
+/* 会话表用**固定布局**，这是「把手与标题边界对齐」的前提。
+   自动布局下（默认 table-layout:auto）浏览器把剩余宽度全摊给唯一可伸缩的第一列，
+   于是列宽 ≫ 文字宽，把手钉在列的右边界、离文字老远，看起来就是「调节杆没对齐」
+   （本机 720px 宽下第一列被撑到 345px，而文字只占 160px，中间空 186px）。
+   改成固定布局后列宽由 colgroup 决定，不再随内容伸缩。 */
+#tblSess{table-layout:fixed}
+/* 四个列给一个**基准比例**，真实宽度由 JS（applySessW）按 --sess-w 反算后写到
+   <col> 的 style.width 上。
+   为什么不直接在 CSS 里 calc：table-layout:fixed 且各列之和 < 表格宽时，浏览器会把
+   列按比例放大填满整表 —— calc(--sess-w + 34) 算出来的不是最终宽度（实测 247 → 279），
+   于是「文字截断点」与「列右边界」又错开了。JS 量到真实宽度后再回头收紧，才稳。 */
+#tblSess col.c-req{width:78px}
+#tblSess col.c-total{width:106px}
+/* 「输出」列给的是**固定宽**而不是 auto：table-layout:fixed 下单元格的 min-width
+   不起作用（列宽由 colgroup 决定），留 auto 会被压成 0 宽、整列看不见。
+   与 JS 里 SESS_OUT_MIN 保持一致。 */
+#tblSess col.c-out{width:96px}
+/* 列宽把手：绝对定位钉在「会话标题」列右边界，像 Excel 的列分隔线。
+   th 是 position:sticky，本身即 positioned，可作为 absolute 的 containing block。
+   ⚠️ 这里**不能**写 position:relative —— 那会把 th 的 sticky 覆盖掉，
+   于是「会话标题」这一列表头不随其余表头冻结、跟着一起滚走（实测踩到）。 */
+th.sessh{padding-right:16px}
+.sessgrip{position:absolute;top:50%;right:1px;width:8px;height:14px;margin-top:-7px;
+  border-radius:3px;cursor:col-resize;opacity:.5;color:var(--tx3);
+  background-image:repeating-linear-gradient(90deg,currentColor 0 1px,transparent 1px 4px)}
+.sessgrip:hover,.sessgrip.on{opacity:1;color:var(--blue);background-color:#eef3ff}
+/* 面板说明里的同款图标：纯装饰，不可拖 */
+.gripico{display:inline-block;width:8px;height:13px;margin:0 2px;vertical-align:-2px;
+  border-radius:3px;opacity:.5;color:var(--tx3);
+  background-image:repeating-linear-gradient(90deg,currentColor 0 1px,transparent 1px 4px)}
+td .mu{font-size:11px;font-weight:500;color:var(--tx2);margin-left:2px}
+.scroll{max-height:430px;overflow:auto;border-radius:6px}
+.bar-inline{display:inline-block;height:7px;border-radius:4px;background:var(--c-fresh);vertical-align:middle}
+.note{color:var(--tx2);font-size:12px;margin-top:11px;line-height:1.7}
+.note b{font-weight:600;color:var(--tx)}
+/* 会话表列多、标题还要可调宽，1fr:1fr 会让它的「装得下」上限太小。
+   给左栏 1.25 份、右栏 1 份。 */
+.grid2{display:grid;grid-template-columns:1.25fr 1fr;gap:16px}
+/* grid 项默认 min-width:auto，不会缩到内容宽度以下：任一半栏内容一宽就会顶破容器。
+   置 0 后各栏严格按比例分，内部超宽由 .scroll 出横向滚动条兜底。 */
+.grid2>*{min-width:0}
+@media(max-width:820px){.grid2{grid-template-columns:1fr}.wrap{padding:18px 12px 48px}}
+.tip{position:fixed;pointer-events:none;background:#1f2329;color:#fff;padding:7px 10px;
+  border-radius:7px;font-size:12px;line-height:1.55;white-space:pre;text-align:left;z-index:99;
+  box-shadow:0 4px 16px rgba(0,0,0,.22);display:none;transform:translate(-50%,-100%)}
+.tip .tt{display:grid;grid-template-columns:auto auto auto;column-gap:14px}
+.tip .tt-h{grid-column:1/-1}
+.tip .tt-v{text-align:right}
+.errbox{background:#fff5f5;border:1px solid #ffd4d4;color:#a32222;border-radius:9px;
+  padding:10px 13px;font-size:12.5px;margin-bottom:14px}
+</style></head><body><div class="wrap">
+
+<div class="hd">
+  <div>
+    <h1>DeepSeek Harness 词元用量看板</h1>
+    <div class="sub">数据源 <code>~/.dsh/sessions/**/session.v*.jsonl.zstd</code> ｜ 覆盖 <span id="span">—</span> ｜ 共 <span id="recn">—</span> 条请求记录 ｜ 单位统一为 M（百万词元）<span id="ver"></span></div>
+  </div>
+  <div class="live">
+    <span class="dot" id="dot"></span>
+    <span id="status">连接中…</span>
+    <button class="btn" id="reload">刷新</button>
+  </div>
+</div>
+
+<div id="err"></div>
+
+<div class="tabs" style="margin-bottom:12px">
+  <button class="btn on" data-r="today">今日（按小时）</button>
+  <button class="btn" data-r="7">近 7 天</button>
+  <button class="btn" data-r="14">近 14 天</button>
+  <button class="btn" data-r="30">近 30 天</button>
+  <button class="btn" data-r="0">全部</button>
+  <span class="pick">
+    <button class="btn" id="btnDay" title="从日历里选一天，按小时查看">自选某天 ▾</button>
+    <div class="pop" id="popDay">
+      <div class="ph2">自选某天（按小时）</div>
+      <div class="pl">日期（限数据覆盖范围）</div>
+      <input type="date" id="inpDay">
+      <div class="pmsg" id="msgDay"></div>
+      <div class="pa"><button class="btn" data-close="1">取消</button><button class="btn primary" id="okDay">应用</button></div>
+    </div>
+  </span>
+  <span class="pick">
+    <button class="btn" id="btnRng" title="从日历里选起止日期，按天查看">自选区间 ▾</button>
+    <div class="pop" id="popRng">
+      <div class="ph2">自选区间（按天）</div>
+      <div class="pl">起始日期</div>
+      <input type="date" id="inpFrom">
+      <div class="pl">结束日期</div>
+      <input type="date" id="inpTo">
+      <div class="pmsg" id="msgRng"></div>
+      <div class="pa"><button class="btn" data-close="1">取消</button><button class="btn primary" id="okRng">应用</button></div>
+    </div>
+  </span>
+</div>
+
+<div class="cards" id="cards"></div>
+
+<div class="panel">
+  <div class="ph">
+    <h2 id="chartTitle">今日分时词元构成 <small id="chartNote"></small></h2>
+    <div class="legend">
+      <span><i style="background:var(--c-fresh)"></i>未缓存输入</span>
+      <span><i style="background:var(--c-cache)"></i>缓存命中</span>
+      <span><i style="background:var(--c-write)"></i>缓存写入</span>
+      <span><i style="background:var(--c-out)"></i>输出</span>
+    </div>
+  </div>
+  <div class="chartrow">
+    <div class="yaxis" id="yaxis"></div>
+    <div class="chart" id="chart"></div>
+  </div>
+  <div class="note" id="chartNoteBox"></div>
+</div>
+
+<div class="panel">
+  <div class="ph"><h2 id="dailyTitle">今日分时明细 <small>点击表头可排序，悬停看精确值</small></h2></div>
+  <div class="scroll"><table id="tblDaily"></table></div>
+</div>
+
+<div class="panel">
+  <div class="ph"><h2>模型分布 <small>点击表头可排序；<span id="mNote"></span></small></h2></div>
+  <div class="scroll"><table id="tblModel"></table></div>
+</div>
+
+<div class="grid2">
+  <div class="panel">
+    <div class="ph"><h2>单会话消耗 Top 20 <small>点击表头可在 Top 20 内排序；灰色为会话 ID 前 8 位；悬停看完整标题与目录；悬停「总词元」看缓存命中/未缓存输入/输入合计及其占总词元的比例；标题宽度 <i class="gripico"></i> 可左右拖调（双击复位）</small></h2></div>
+    <div class="scroll"><table id="tblSess"></table></div>
+  </div>
+  <div class="panel">
+    <div class="ph"><h2>月度汇总 <small>点击表头可排序（默认大月在上，小月在下）</small></h2></div>
+    <div class="scroll"><table id="tblMonth"></table></div>
+  </div>
+</div>
+
+</div>
+<div class="tip" id="tip"></div>
+<script>
+// 排序记忆：各表存一份 localStorage，值形如 {"k":"total","d":-1}。
+// 写入共三处，缺一处就会出现「刷新后的排序 ≠ 刷新前屏上的排序」：
+//   ① 点击表头  ② setRange() 的重置  ③ renderDaily() 里 key 不适用时的自动纠正
+var DAILY_SORT_KEY='dsh_sort_daily', MONTH_SORT_KEY='dsh_sort_month';
+// 排序键白名单：记忆可能是旧版本留下的列名（列改过名/删过列），不校验会把表排成乱序
+var DAILY_SORT_KEYS=['date','hour','req','fresh','cached','cwrite','output','total'];
+var MONTH_SORT_KEYS=['month','req','fresh','cached','cwrite','output','total'];
+function loadSort(lsKey,def,valid){
+  try{
+    var o=JSON.parse(localStorage.getItem(lsKey)||'null');
+    if(o && valid.indexOf(o.k)>=0 && (o.d===1||o.d===-1)) return {k:o.k,d:o.d};
+  }catch(e){}                    // localStorage 被禁 / 内容不是 JSON：静默退回默认
+  return {k:def.k,d:def.d};
+}
+function saveSort(lsKey,o){ try{ localStorage.setItem(lsKey,JSON.stringify({k:o.k,d:o.d})); }catch(e){} }
+
+// 时间范围记忆：记住上次选的范围，刷新页面后自动回到那个范围。
+// 取值范围与按钮的 data-r 一一对应：'today' | 0（全部）| 7 | 14 | 30 | 'day:YYYY-MM-DD' | 'rng:A..B'。
+// 用白名单校验而不是直接信任记忆：值可能是旧版本留下的、也可能被手工改过。
+var RANGE_KEY='dsh_range', RANGE_PRESETS=[0,7,14,30];
+function validRange(v){
+  if(v==='today') return true;
+  if(typeof v==='number') return RANGE_PRESETS.indexOf(v)>=0;
+  if(typeof v==='string'){
+    return /^day:\d{4}-\d{2}-\d{2}$/.test(v) || /^rng:\d{4}-\d{2}-\d{2}\.\.\d{4}-\d{2}-\d{2}$/.test(v);
+  }
+  return false;
+}
+function loadRange(){
+  try{
+    var s=localStorage.getItem(RANGE_KEY);
+    if(s===null) return 'today';               // 从没选过 → 默认今日
+    var v=JSON.parse(s);
+    return validRange(v) ? v : 'today';
+  }catch(e){ return 'today'; }
+}
+function saveRange(){ try{ localStorage.setItem(RANGE_KEY,JSON.stringify(RANGE)); }catch(e){} }
+
+var DATA=null, RANGE=loadRange();
+// 「每日词元构成」的横向视野：按天模式下可视区固定铺 CHART_VIS_DAYS 天，天数超过它
+// 就按比例加宽画布、交给 .chart 的横向滚动条查看其余天数（默认停在最近的那一段）。
+var CHART_VIS_DAYS=30, CHART_VIS_MIN=7, CHART_MAX_W=12000, CHART_KEY=null;
+// 当前视窗天数 visDays：把滚轮压在横向滚动条上无级调节，范围 [CHART_VIS_MIN, CHART_VIS_DAYS]。
+// CHART_ZOOM 标记「本次渲染是滚轮缩放引起的」，renderChart 据此把视窗正中那根柱留在原处。
+var visDays=CHART_VIS_DAYS, CHART_ZOOM=false;
+// 图表几何常量。AXIS_W 是左侧固定轴列的宽；列内刻度左对齐在 x=0，于是刻度首字符
+// 与上方标题首字左边缘齐平。PAD_L / PAD_R 是绘图区内部的左右留白。
+var AXIS_W=44, PAD_L=10, PAD_R=16;
+// 最近一次渲染的几何参数，供 syncAxis() 在横向滚动后重算刻度用。
+var CHART_GEO=null;
+// 视窗内「看得见的那几根柱」的峰值。第 i 根柱占 [PAD_L+iw*i/n, PAD_L+iw*(i+1)/n]，
+// 与视窗 [sl, sl+cw] 求交。纵轴刻度与柱高都用它，所以放大后柱子明显变高。
+function visibleMaxOf(sl,n,iw,cw,rows){
+  if(!(iw>0)) return 1;
+  var v0=Math.min(n-1, Math.max(0, Math.floor((sl-PAD_L)*n/iw)));
+  var v1=Math.min(n-1, Math.max(v0, Math.ceil((sl+cw-PAD_L)*n/iw)-1));
+  var max=1;
+  for(var q=v0; q<=v1 && q<rows.length; q++){
+    var tv=rowTotal(rows[q]);
+    if(tv>max) max=tv;
+  }
+  return max;
+}
+// 纵轴刻度单独生成：刻度进固定的 #yaxis，网格线留在滚动的绘图 SVG 里。
+function axisSVG(max,padT,ih,H){
+  var out=['<svg width="'+AXIS_W+'" height="'+H+'" viewBox="0 0 '+AXIS_W+' '+H+'">'];
+  for(var g=0; g<=4; g++){
+    var y=padT+ih-ih*g/4;
+    out.push('<text x="0" y="'+(y+4).toFixed(1)+'" text-anchor="start" font-size="10.5" fill="#9aa1ab">'+Mchart(max*g/4)+'</text>');
+  }
+  out.push('</svg>');
+  return out.join('');
+}
+// 横向滚动后把纵轴刻度对齐到新的可见范围。只重写 #yaxis、绝不碰 #chart ——
+// 因此不会再触发 scroll 事件，不存在重入风险。
+function syncAxis(){
+  var g=CHART_GEO;
+  if(!g) return;
+  var box=document.getElementById('chart');
+  var max=visibleMaxOf(box.scrollLeft, g.n, g.iw, g.cw, g.rows);
+  if(max===g.max) return;
+  g.max=max;
+  document.getElementById('yaxis').innerHTML=axisSVG(max, g.padT, g.ih, g.H);
+}
+// 明细表默认日期降序（最新在前）；月度表默认月份降序。有记忆时两者都被 loadSort() 覆盖。
+var SORT=loadSort(DAILY_SORT_KEY,{k:'date',d:-1},DAILY_SORT_KEYS);
+// 月度汇总自带一套排序状态，故意不与明细表的 SORT 共享：月度表是全量月份、不随范围
+// 变化，而明细表的 SORT 会在切换范围时被 setRange() 重置。
+var MSORT=loadSort(MONTH_SORT_KEY,{k:'month',d:-1},MONTH_SORT_KEYS);
+var MODEL_SORT_KEY='dsh_sort_models', SESS_SORT_KEY='dsh_sort_sessions';
+var MODEL_SORT_KEYS=['model','provider','req','fresh','cached','cwrite','output','total','pct'];
+var SESS_SORT_KEYS=['title','req','total','output'];
+var MODELSORT=loadSort(MODEL_SORT_KEY,{k:'total',d:-1},MODEL_SORT_KEYS);
+var SESSSORT=loadSort(SESS_SORT_KEY,{k:'total',d:-1},SESS_SORT_KEYS);
+// 表头点击的统一绑法：innerHTML 重建会把旧节点的 onclick 一起丢掉，所以每次渲染都要
+// 重新绑一遍。四张可排序的表都走这里。
+function bindSortTh(t,onPick){
+  Array.prototype.forEach.call(t.querySelectorAll('th[data-k]'),function(th){
+    th.onclick=function(ev){
+      // 会话标题列里嵌着列宽拖拽把手，点它会冒泡到 th —— 那不是在点排序
+      if(ev && ev.target && ev.target.closest && ev.target.closest('.sessgrip')) return;
+      onPick(th.getAttribute('data-k'));
+    };
+  });
+}
+var BASE=location.pathname.replace(/[^\/]*$/,'');
+// 前端版本号：改了这个文件就改这一行。后端版本号在 usage_server.py 的 BE_VER，
+// 由 /api/data 带过来，页头会同时显示两者。
+var FE_VER='v1.0.0';
+var tip=document.getElementById('tip');
+
+function fmt(n){ n=Number(n||0); return n.toLocaleString('en-US'); }
+function M(n){
+  n=Number(n||0)/1e6;
+  var a=Math.abs(n);
+  if(a>=100) return n.toFixed(1);
+  if(a>=10) return n.toFixed(2);
+  if(a>=1) return n.toFixed(3);
+  if(a===0) return '0';
+  return n.toFixed(4);
+}
+function Mlabel(n){ return M(n)+' M'; }
+function Mx(n){ return M(n)+'<span class="mu">M</span>'; }
+function Mchart(n){
+  n=Number(n||0)/1e6;
+  if(n===0) return '0';
+  var a=Math.abs(n);
+  if(a>=100) return n.toFixed(0)+'M';
+  if(a>=10) return n.toFixed(1)+'M';
+  if(a>=1) return n.toFixed(2)+'M';
+  return n.toFixed(3)+'M';
+}
+function esc(s){ return String(s==null?'':s).replace(/[&<>"]/g,function(c){
+  return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]; }); }
+// 会话标题列的可调宽度（px）。用 CSS 变量驱动、由 CSS ellipsis 自动截断，
+// 好处是拖动时只改变量、不必重建表格；中英混排也按真实像素精确截断。
+var SESS_W_DEF=220, SESS_W_MIN=70, SESS_W_MAX=600;
+// 自动收敛时的下限：栏被压得极窄时也不把标题压到看不见，宁可让 .scroll 出横向滚动条
+var SESS_W_FIT_MIN=160;
+var SESS_W=SESS_W_DEF, SESS_DRAG=false;
+function loadSessW(){
+  try{
+    var v=parseInt(localStorage.getItem('dsh_sess_w'),10);
+    if(v>=SESS_W_MIN && v<=SESS_W_MAX) SESS_W=v;
+  }catch(e){}
+}
+// 标题列的「非文字开销」：td 的左右内边距 9+9 + th.sessh 给把手让出的 16 = 34。
+var SESS_COL_EXTRA=34;
+// 「输出」列最小可读宽：表头「输出」+ 形如 0.1943 M 的值
+var SESS_OUT_MIN=96;
+// 两个定宽数值列
+var SESS_REQ_W=78, SESS_TOTAL_W=106;
+
+// 把 --sess-w 落到真实列宽上。
+//
+// 为什么要用 JS 写死绝对像素、而不是交给 CSS calc：
+//   table-layout:fixed 且各列之和 < 表格宽时，浏览器会**把列按比例放大**去填满整表 ——
+//   CSS 里算出的 calc(213+34)=247px 最终会变成 279px，于是文字截断点又跑到把手左边
+//   （实测差 48px）。所以这里直接把表格宽度也定成「各列之和」，不存在可摊的余量，
+//   列宽就严格是我们算的值。多出来的宽度全部给「输出」列。
+//
+// 文字截断点为什么天然对齐：.sline 是 width:100%，填满 td 的内容盒，
+// 所以它总是在「列宽 − 内边距」处结束，而把手钉在列右边界 —— 两者只差固定留白。
+function applySessW(){
+  var tbl=document.getElementById('tblSess');
+  var cols=tbl?tbl.querySelectorAll('col'):null;
+  if(!cols || cols.length<4){ 
+    document.documentElement.style.setProperty('--sess-w',SESS_W+'px');
+    return;
+  }
+  var sc=tbl.parentNode;
+  var avail=(sc&&sc.clientWidth)?sc.clientWidth:0;
+  var sessW=SESS_W+SESS_COL_EXTRA;
+  var rest=SESS_REQ_W+SESS_TOTAL_W;
+  // 「输出」列吃掉剩余宽度；半栏太窄时守一个可读下限（此时表格比容器宽，.scroll 出横向滚动条）
+  var outW=avail?Math.max(SESS_OUT_MIN, avail-sessW-rest):SESS_OUT_MIN;
+  cols[0].style.width=sessW+'px';
+  cols[1].style.width=SESS_REQ_W+'px';
+  cols[2].style.width=SESS_TOTAL_W+'px';
+  cols[3].style.width=outW+'px';
+  // 表格宽 = 各列之和（不留可摊余量，列宽才不会被浏览器按比例放大）
+  tbl.style.width=(sessW+rest+outW)+'px';
+  // .sline 用 100% 填满内容盒；这里把变量也同步上，供无 JS 时的 CSS 兜底
+  document.documentElement.style.setProperty('--sess-w',SESS_W+'px');
+  document.querySelectorAll('.sessgrip').forEach(function(g){
+    g.setAttribute('title','左右拖动调整标题显示宽度（当前 '+SESS_W+'px），双击恢复默认');
+  });
+}
+function saveSessW(){ try{ localStorage.setItem('dsh_sess_w',String(SESS_W)); }catch(e){} }
+// 动态上限：标题列最多能占多宽，才不会把表格撑出所在半栏（进而顶到「月度汇总」）。
+//
+// 动态上限：标题列最多能占多宽，才不会把表格撑出所在半栏（进而顶到「月度汇总」）。
+// 只减两个定宽数值列 + 输出列下限 + 标题列的非文字开销 —— 不再去量「其余各列实宽」，
+// 因为那些列宽本身就是 applySessW() 按这里算出的上限写下去的，量回来会形成循环依赖。
+function sessWLimit(){
+  var tbl=document.getElementById('tblSess');
+  if(!tbl || !tbl.offsetParent) return SESS_W_MAX;
+  var sc=tbl.parentNode;
+  if(!sc || !sc.clientWidth) return SESS_W_MAX;
+  var lim=sc.clientWidth-SESS_REQ_W-SESS_TOTAL_W-SESS_OUT_MIN-SESS_COL_EXTRA-2;
+  if(lim<SESS_W_FIT_MIN) lim=SESS_W_FIT_MIN;
+  return Math.min(Math.round(lim),SESS_W_MAX);
+}
+function clampSessWToFit(){
+  if(SESS_DRAG) return;
+  var lim=sessWLimit();
+  if(lim<SESS_W_MAX && SESS_W>lim){ SESS_W=lim; applySessW(); saveSessW(); }
+}
+// 表头把手：mousedown 起拖 → document 上跟手 → mouseup 收尾并持久化。
+// 委托挂在 document 上，因此表格每 30 秒 innerHTML 重建、把手被换掉，都不影响拖拽。
+function initSessGrip(){
+  if(document.__gripInit) return;
+  document.__gripInit=1;
+  document.addEventListener('mousedown',function(e){
+    var g=e.target&&e.target.closest?e.target.closest('.sessgrip'):null;
+    if(!g) return;
+    if(e.preventDefault) e.preventDefault();
+    SESS_DRAG=true; g.classList.add('on');
+    var x0=e.clientX, w0=SESS_W;
+    var wMax=sessWLimit();
+    function mm(ev){
+      var w=Math.max(SESS_W_MIN,Math.min(wMax,Math.round(w0+(ev.clientX-x0))));
+      if(w!==SESS_W){ SESS_W=w; applySessW(); }
+    }
+    function mu(){
+      document.removeEventListener('mousemove',mm);
+      document.removeEventListener('mouseup',mu);
+      SESS_DRAG=false;
+      document.querySelectorAll('.sessgrip').forEach(function(x){ x.classList.remove('on'); });
+      saveSessW();
+    }
+    document.addEventListener('mousemove',mm);
+    document.addEventListener('mouseup',mu);
+  });
+  document.addEventListener('dblclick',function(e){
+    var g=e.target&&e.target.closest?e.target.closest('.sessgrip'):null;
+    if(!g) return;
+    SESS_W=SESS_W_DEF; applySessW(); saveSessW();
+  });
+}
+function isHourMode(){ return RANGE==='today' || !!pickedDay(); }
+function todayDate(){
+  return DATA && DATA.days.length ? DATA.days[DATA.days.length-1].date : null;
+}
+// 自选单日：RANGE = 'day:YYYY-MM-DD'
+function pickedDay(){
+  var s=String(RANGE);
+  return s.indexOf('day:')===0 ? s.slice(4) : null;
+}
+// 自选区间：RANGE = 'rng:YYYY-MM-DD..YYYY-MM-DD'
+function pickedSpan(){
+  var s=String(RANGE);
+  if(s.indexOf('rng:')!==0) return null;
+  var p=s.slice(4).split('..');
+  return {from:p[0], to:p[1]||p[0]};
+}
+function focusDate(){ return RANGE==='today' ? todayDate() : pickedDay(); }
+function rangeLabel(){
+  if(RANGE==='today') return '今日';
+  var d=pickedDay(); if(d) return d;
+  var sp=pickedSpan(); if(sp) return sp.from+' ~ '+sp.to;
+  return RANGE ? ('近 '+RANGE+' 天') : '全部';
+}
+function sliceDays(){
+  var ds=DATA.days;
+  if(RANGE==='today') return ds.length?[ds[ds.length-1]]:[];
+  var d=pickedDay();
+  if(d) return ds.filter(function(x){ return x.date===d; });
+  var sp=pickedSpan();
+  if(sp) return ds.filter(function(x){ return x.date>=sp.from && x.date<=sp.to; });
+  if(!RANGE) return ds.slice();
+  return ds.slice(-RANGE);
+}
+function sumOf(arr,k){ return arr.reduce(function(a,d){return a+(d[k]||0);},0); }
+// 一行的总词元：优先用后端算好的 total；缺失时按四个桶现算
+function rowTotal(d){
+  if(d && d.total) return d.total;
+  if(!d) return 0;
+  return (d.fresh||0)+(d.cached||0)+(d.cwrite||0)+(d.output||0);
+}
+
+// 任意一天的小时表（缺失的小时补 0，固定 24 行）
+function hoursOf(d){
+  if(!d) return [];
+  var map={};
+  (DATA.hours||[]).forEach(function(h){ if(h.date===d) map[parseInt(h.hour,10)]=h; });
+  var out=[];
+  for(var i=0;i<24;i++){
+    out.push(map[i] || {date:d, hour:(i<10?'0':'')+i, req:0, fresh:0, cached:0,
+                        cwrite:0, output:0, total:0, inputTotal:0});
+  }
+  return out;
+}
+function todayHours(){ return hoursOf(focusDate()); }
+function hourLabel(h){ return h+':00'; }
+
+function renderCards(){
+  var s=sliceDays(), cnt=s.length, n=cnt||1;
+  var total=sumOf(s,'total'), cached=sumOf(s,'cached'), cwrite=sumOf(s,'cwrite'),
+      out=sumOf(s,'output'), fresh=sumOf(s,'fresh'), req=sumOf(s,'req'),
+      inTotal=sumOf(s,'inputTotal');
+  // 缓存命中率的分母是「计费输入合计」（fresh + cached + cwrite），不是单独 fresh
+  var rate= inTotal? cached/inTotal*100 : 0;
+  var cards=[];
+  if(isHourMode()){
+    var last=s[0]||{}, cd=focusDate()||'';
+    var dl=(RANGE==='today')?'今日':'当日';
+    if(!last.date){
+      cards.push([dl+'数据', '—', (cd||'所选日期')+' 无任何请求记录']);
+    } else {
+      var idx=-1;
+      DATA.days.forEach(function(x,i){ if(x.date===cd) idx=i; });
+      var prev = idx>0 ? DATA.days[idx-1] : null;
+      var hint=fmt(last.total)+' 词元';
+      if(prev && prev.total){
+        var delta=(last.total-prev.total)/prev.total*100;
+        hint+='　'+(RANGE==='today'?'较昨日':('较 '+prev.date.slice(5)))+' '+(delta>=0?'+':'')+delta.toFixed(0)+'%';
+      }
+      cards.push([dl+'总词元', Mlabel(last.total), hint]);
+      cards.push([dl+'未缓存输入', Mlabel(last.fresh),
+        last.inputTotal?('占'+dl+'输入 '+(last.fresh/last.inputTotal*100).toFixed(1)+'%'):'']);
+      cards.push([dl+'缓存命中', Mlabel(last.cached),
+        last.inputTotal?('占'+dl+'输入 '+(last.cached/last.inputTotal*100).toFixed(1)+'%'):'']);
+      cards.push([dl+'输出词元', Mlabel(last.output),
+        last.total?('占'+dl+'总词元 '+(last.output/last.total*100).toFixed(1)+'%'):'']);
+      cards.push([dl+' API 请求数', fmt(last.req),
+        last.req?('平均每次 '+fmt(Math.round(last.total/last.req))+' 词元'):'']);
+    }
+  } else {
+    var lastD=DATA.days[DATA.days.length-1], prevD=DATA.days[DATA.days.length-2];
+    if(pickedSpan() && !cnt){
+      cards.push(['区间内数据', '—', rangeLabel()+' 无任何请求记录']);
+    } else {
+      if(pickedSpan()){
+        cards.push(['区间总词元', Mlabel(total), rangeLabel()+'　共 '+cnt+' 天']);
+      } else {
+        if(lastD) cards.push(['今日词元', Mlabel(lastD.total), fmt(lastD.total)+' 词元']);
+        if(prevD) cards.push(['昨日词元', Mlabel(prevD.total), fmt(prevD.total)+' 词元']);
+      }
+      cards.push(['范围日均', Mlabel(total/n), '按 '+n+' 天计']);
+      // 多天视图的词元四分量：总词元 = 缓存命中 + 未缓存输入 + 缓存写入 + 输出。
+      // 「未缓存计算量」= 未缓存输入 + 输出，是真正新增的计算量。
+      cards.push(['未缓存计算量', Mlabel(fresh+out),
+        '输入 '+Mlabel(fresh)+' ＋ 输出 '+Mlabel(out)]);
+      cards.push(['未缓存输入', Mlabel(fresh), '日均 '+Mlabel(fresh/n)]);
+      cards.push(['输出词元', Mlabel(out), '日均 '+Mlabel(out/n)]);
+      cards.push(['缓存命中输入', Mlabel(cached), '日均 '+Mlabel(cached/n)]);
+      cards.push(['缓存命中率', rate.toFixed(1)+'%',
+        '命中 '+Mlabel(cached)+' ／ 输入合计 '+Mlabel(inTotal)]);
+      cards.push(['API 请求数', fmt(req), '日均 '+(req/n).toFixed(0)+' 次']);
+    }
+  }
+  document.getElementById('cards').innerHTML=cards.map(function(c){
+    var v=String(c[1]);
+    var unit=v.indexOf(' M')>=0?' M':'';
+    if(unit) v=v.slice(0,-2);
+    return '<div class="card"><div class="k">'+esc(c[0])+'</div>'+
+      '<div class="v">'+esc(v)+(unit?'<span class="mn">M</span>':'')+'</div>'+
+      (c[2]?'<div class="h">'+esc(c[2])+'</div>':'')+'</div>';
+  }).join('');
+}
+
+// 四个堆叠段：缓存命中（最便宜）→ 未缓存输入 → 缓存写入 → 输出
+function segsOf(d){
+  return [['#a9c2ff', d.cached||0, '缓存命中'],
+          ['#3370ff', d.fresh||0, '未缓存输入'],
+          ['#8b5cf6', d.cwrite||0, '缓存写入'],
+          ['#00b2b2', d.output||0, '输出']];
+}
+
+function renderChart(){
+  var hm=isHourMode();
+  var rows=hm?todayHours():sliceDays();
+  var label=function(r){ return hm?r.hour:r.date.slice(5); };
+  var n=rows.length||1;
+  var ybox=document.getElementById('yaxis');
+  var box=document.getElementById('chart');
+  // 滚动位置必须在这里读干净：下面重设 innerHTML 后 scrollLeft 会被钳回 0，事后再读就晚了。
+  var prevSL=box.scrollLeft, prevSW=box.scrollWidth;
+  // Y 轴在滚动容器之外，所以先把左列的宽定死、再量绘图区的可用宽。
+  ybox.style.width=AXIS_W+'px';
+  var cw=box.clientWidth||900;
+  var padT=14, padB=46, H=224;
+  // 范围 / 天数变了 → 复位缩放与滚动位置（回到视窗 30 天、停在最右）；
+  // 若是滚轮缩放引起的渲染，就以「视窗正中那根柱」为锚对齐。
+  var ck=String(RANGE)+'|'+n+'|'+(hm?'h':'d');
+  var keep;
+  if(ck!==CHART_KEY){ CHART_KEY=ck; visDays=CHART_VIS_DAYS; keep='right'; }
+  else if(CHART_ZOOM){ keep='anchor'; }
+  else { keep='keep'; }
+  CHART_ZOOM=false;
+  // 小时视图只有 24 项、天然铺得下，视窗天数就取 n；按天模式才受 visDays 控制。
+  var vd=hm?n:visDays;
+  // 视野固定：绘图区一屏铺满 vd 天，于是「每天占多少像素」恒等于 (cw−PAD_L−PAD_R)/vd，
+  // 与总天数无关。天数超过它时按该日宽等比加宽画布，多出的天数交给横向滚动条。
+  var dayW=(cw-PAD_L-PAD_R)/vd;
+  var w=Math.round(Math.max(cw, n*dayW+PAD_L+PAD_R));
+  if(w>CHART_MAX_W) w=CHART_MAX_W;
+  var iw=w-PAD_L-PAD_R, ih=H-padT-padB;
+  var bw=Math.min(56, iw/n*0.7);
+  // 本次要落到的横向滚动位置。上界用算术值 w−cw，而不是读 box.scrollWidth ——
+  // 此刻 innerHTML 还没换，DOM 上的宽度仍是上一帧的。
+  var maxSL=Math.max(0, w-cw), sl;
+  if(keep==='right'){
+    sl=maxSL;
+  }else if(keep==='anchor'){
+    // 缩放前视窗正中那一点对应的浮点柱索引，反解得 i；再让同一个 i 落在缩放后的视窗正中。
+    var iwOld=Math.max(1, prevSW-PAD_L-PAD_R);
+    var fr=((prevSL+cw/2)-PAD_L)*n/iwOld-0.5;
+    sl=PAD_L+iw*(fr+0.5)/n-cw/2;
+  }else{
+    sl=prevSL;
+  }
+  sl=Math.max(0, Math.min(sl, maxSL));
+  var max=visibleMaxOf(sl, n, iw, cw, rows);
+  // 轴刻度和网格线分开画：刻度进 #yaxis（固定不动），网格线留在滚动的绘图 SVG 里。
+  // 两者共用同一组 y，轴才不会和柱子的参考线错位。
+  var parts=[];
+  parts.push('<svg width="'+w+'" height="'+H+'" viewBox="0 0 '+w+' '+H+'">');
+  for(var g=0; g<=4; g++){
+    var y=padT+ih-ih*g/4;
+    parts.push('<line x1="'+PAD_L+'" y1="'+y.toFixed(1)+'" x2="'+(w-PAD_R)+'" y2="'+y.toFixed(1)+
+      '" stroke="#eceef1" stroke-width="1"/>');
+  }
+  rows.forEach(function(d,i){
+    var cx=PAD_L+iw*(i+0.5)/n;
+    var segs=segsOf(d);
+    var y=padT+ih;
+    var dTotal=rowTotal(d);
+    segs.forEach(function(sg){
+      var h=sg[1]/max*ih; if(h<=0) return; y-=h;
+      parts.push('<rect class="bar" x="'+(cx-bw/2).toFixed(1)+'" y="'+y.toFixed(1)+'" width="'+bw.toFixed(1)+
+        '" height="'+Math.max(1,h).toFixed(1)+'" fill="'+sg[0]+'" rx="2"/>');
+    });
+    if(dTotal>0){
+      var pt={t:(hm?hourLabel(d.hour):d.date), r:[], f:['合计', fmt(dTotal)+' 词元']};
+      segs.forEach(function(sg){
+        if(!sg[1]) return;                       // 为 0 的段不占提示行
+        var share=dTotal?((sg[1]/dTotal*100).toFixed(1)+'%'):'—';
+        pt.r.push([sg[2], fmt(sg[1])+' 词元', '占比 '+share]);
+      });
+      var flat=[pt.t].concat(pt.r.map(function(x){ return x[0]+' '+x[1]+'　'+x[2]; }))
+        .concat([pt.f[0]+' '+pt.f[1]]).join('\n');
+      var hh=Math.max(dTotal/max*ih, 12);
+      parts.push('<rect x="'+(cx-bw/2).toFixed(1)+'" y="'+(padT+ih-hh).toFixed(1)+'" width="'+bw.toFixed(1)+
+        '" height="'+hh.toFixed(1)+'" fill="transparent" pointer-events="all" data-tip="'+
+        esc(flat).replace(/\n/g,'&#10;')+'" data-tipx="'+esc(JSON.stringify(pt))+'"/>');
+    }
+    if(n<=42 || i%Math.ceil(n/42)===0){
+      parts.push('<text x="'+cx.toFixed(1)+'" y="'+(padT+ih+15)+'" text-anchor="middle" font-size="10" fill="#9aa1ab" transform="rotate(-45 '+cx.toFixed(1)+' '+(padT+ih+15)+')">'+label(d)+'</text>');
+    }
+  });
+  parts.push('</svg>');
+  box.innerHTML=parts.join('');
+  ybox.innerHTML=axisSVG(max, padT, ih, H);
+  // 存下这一帧的几何，供 syncAxis() 在横向滚动后重算刻度。必须赶在下面那句
+  // box.scrollLeft=sl 之前就位 —— 那次赋值在真实浏览器里会触发 scroll。
+  CHART_GEO={n:n, iw:iw, cw:cw, rows:rows, padT:padT, ih:ih, H:H, max:max};
+  // 溢出即横向滚动。位置已在上面按「复位到最右 / 以视窗正中为锚 / 沿用当前」算成 sl，
+  // 这里补写回去 —— 重设 innerHTML 会把 scrollLeft 钳回 0，所以必须显式落一次。
+  box.scrollLeft=sl;
+  var cd=focusDate(), sp=pickedSpan();
+  var noteTxt;
+  if(hm){ noteTxt=(cd||'—')+' 共 24 小时'; }
+  else if(sp){ noteTxt=sp.from.slice(5)+' ~ '+sp.to.slice(5)+'，'+rows.length+' 天'+(n>vd?'，可横向拖动':''); }
+  else { noteTxt=n+' 天'+(n>vd?'，可横向拖动':''); }
+  document.getElementById('chartTitle').innerHTML=
+    (hm?(RANGE==='today'?'今日分时词元构成':'当日分时词元构成'):'每日词元构成')+
+    ' <small id="chartNote">（'+noteTxt+'）</small>';
+  var noteBox= hm
+    ? '每根柱是<b>该小时</b>内全部 API 请求的词元总和。缓存命中部分是每轮重发的历史上下文，量大但单价最低；<b>未缓存输入 + 输出</b>才是该小时真正新增的计算量。'
+    : '每根柱是该日<b>全部 API 请求的词元总和</b>。缓存命中部分每轮请求都要重发一遍，所以它在总量里占大头却最便宜；<b>未缓存输入 + 输出</b>才是当日真正新消耗的计算量。';
+  // 「（当前是最新的 N 天）」只在视窗确实贴住最右端时才成立；缩放或拖到中段后这句会变成
+  // 假话，所以按实际位置决定要不要说。
+  var vdr=Math.round(vd), atRight=(sl+cw)>=w-1;
+  if(!hm && n>vdr){
+    noteBox+='<br>可视区显示 <b>'+vdr+' 天</b>'+(atRight?'（当前是最新的 '+vdr+' 天）':'')+
+      '，鼠标置于下方横向滚动条上滚轮可缩放可视区范围。';
+  }
+  document.getElementById('chartNoteBox').innerHTML=noteBox;
+}
+
+// 「缓存命中 ÷ 该行输入合计」的百分比（0~100）。分母为 0 时返回 null，由 pctCell()
+// 显示成「—」—— 0/0 是 NaN，直接 toFixed 会印出「NaN%」。
+function hitPct(cached, inputTotal){
+  return inputTotal>0 ? (cached/inputTotal*100) : null;
+}
+function pctCell(v){ return v==null ? '—' : v.toFixed(1)+'%'; }
+
+function renderDaily(){
+  var hm=isHourMode();
+  // 派生列（hit）必须挂在行的副本上：todayHours() 直接返回 DATA 内部数组，
+  // 往元素上写字段会污染数据源，下次渲染/其他表都会看到这个多余属性。
+  var rows=(hm?todayHours():sliceDays()).map(function(d){
+    var o={}; for(var k in d){ o[k]=d[k]; }
+    o.hit=hitPct(d.cached, d.inputTotal);
+    return o;
+  });
+  var defaultKey=hm?'hour':'date';
+  if((hm&&SORT.k==='date')||(!hm&&SORT.k==='hour')){ SORT={k:defaultKey,d:hm?1:-1}; saveSort(DAILY_SORT_KEY,SORT); }
+  rows.sort(function(a,b){
+    var x=a[SORT.k], y=b[SORT.k];
+    if(typeof x==='string'){ return SORT.d*(x<y?-1:x>y?1:0); }
+    return SORT.d*((x||0)-(y||0));
+  });
+  var maxT=Math.max(1,Math.max.apply(null,rows.map(function(d){return rowTotal(d);})));
+  var maxRow=rows.reduce(function(a,b){ return rowTotal(b)>rowTotal(a)?b:a; },{total:-1});
+  var maxLabel=rows.length?(hm?hourLabel(maxRow.hour):maxRow.date):'—';
+  var tipText='条形长度 = 该行总词元 ÷ 本表最大值（'+maxLabel+'，即满格的那一行）\n'+
+    '分母只取本表，会随所选范围变化，是表内各行的横向对比，不等于占全部总量的百分比。\n'+
+    '不足 2% 的按 2% 显示。';
+  var tipAttr=esc(tipText).replace(/\n/g,'&#10;');
+  var cols=[[defaultKey,hm?'时段':'日期'],['req','请求数'],['fresh','未缓存输入'],
+            ['cached','缓存命中'],['hit','缓存命中占比'],
+            ['output','输出词元'],['total','总词元']];
+  var html='<thead><tr>'+cols.map(function(c){
+    return '<th data-k="'+c[0]+'" style="cursor:pointer">'+c[1]+(SORT.k===c[0]?(SORT.d>0?' ▲':' ▼'):'')+'</th>';
+  }).join('')+'<th class="help" title="'+tipAttr+'">本表对比</th></tr></thead><tbody>';
+  rows.forEach(function(d){
+    var key=hm?hourLabel(d.hour):d.date;
+    var zero=!(d.req>0);
+    html+='<tr'+(zero?' style="color:#c8ccd2"':'')+'><td>'+key+'</td><td>'+fmt(d.req)+
+      '</td><td title="'+fmt(d.fresh)+' 词元">'+Mx(d.fresh)+'</td>'+
+      '<td title="'+fmt(d.cached)+' 词元">'+Mx(d.cached)+'</td>'+
+      '<td title="占输入合计">'+pctCell(d.hit)+'</td>'+
+      '<td title="'+fmt(d.output)+' 词元">'+Mx(d.output)+'</td>'+
+      '<td title="'+fmt(d.total)+' 词元"><b>'+Mx(d.total)+'</b></td>'+
+      '<td style="width:110px"><span class="bar-inline" style="width:'+Math.max(2,rowTotal(d)/maxT*100).toFixed(1)+'%"></span></td></tr>';
+  });
+  html+='</tbody>';
+  var t=document.getElementById('tblDaily');
+  t.innerHTML=html;
+  var extra=(pickedDay()||pickedSpan()) ? (rangeLabel()+' · ') : '';
+  document.getElementById('dailyTitle').innerHTML=(hm?(RANGE==='today'?'今日分时明细':'当日分时明细'):'每日明细')+
+    ' <small>'+extra+'点击表头可排序，悬停看精确值（单位 M = 百万词元）；「本表对比」列悬停可看口径说明</small>';
+  bindSortTh(t,function(k){
+    if(SORT.k===k){ SORT.d=-SORT.d; } else { SORT.k=k; SORT.d=(k==='hour'||k==='date')?(hm?1:-1):-1; }
+    saveSort(DAILY_SORT_KEY,SORT);   // 记住这次点击：刷新后仍是这个列与方向
+    renderDaily();
+  });
+}
+
+// 模型分布的列定义：顺序即表头顺序，键名同时是排序键（与 th 的 data-k 对应）。
+// 两个派生列口径不同，别混：
+//   'hit' = 该行 cached ÷ 该行输入合计（fresh+cached+cwrite），衡量缓存命中率，0~100
+//   'pct' = 该行 total ÷ 本表 Σtotal，衡量该模型占全部词元的比重
+// 'pct' 与 'total' 必然同序，排序时归到 'total' —— 但给它一个自己的键，点「占比」时
+// 指示器才会落在占比列上。'hit' 必须是行上的真实字段（在 renderModels 聚合后现算）。
+function modelCols(){
+  return [['model','模型'],['provider','供应商'],['req','请求数'],['fresh','未缓存输入'],
+          ['cached','缓存命中'],['hit','缓存命中占比'],
+          ['output','输出'],['total','总词元'],['pct','占比']];
+}
+function renderModels(){
+  var hm=isHourMode();
+  var rows, note;
+  if(hm){
+    var cd=focusDate();
+    rows=DATA.models.filter(function(m){ return m.date===cd; });
+    note='（'+(RANGE==='today'?'今日':cd)+'）';
+  } else {
+    var sd=sliceDays();
+    var lo=sd.length?sd[0].date:'9999-99-99';
+    var hi=sd.length?sd[sd.length-1].date:'0000-00-00';
+    rows=DATA.models.filter(function(m){ return m.date>=lo && m.date<=hi; });
+    note='（'+rangeLabel()+'）';
+  }
+  // 同一模型可能挂在多个供应商下（本机确实存在），所以按「供应商 + 模型」成行，
+  // 不然两家同名模型的数字会糊在一起、也看不出钱花在哪个通道上。
+  var by={};
+  rows.forEach(function(m){
+    var key=(m.provider||'')+'\u0000'+(m.model||'');
+    var o=by[key]=by[key]||{model:m.model, provider:m.provider, req:0, fresh:0, cached:0,
+                            cwrite:0, output:0, total:0, inputTotal:0};
+    o.req+=m.req; o.fresh+=(m.fresh||0); o.cached+=(m.cached||0); o.cwrite+=(m.cwrite||0);
+    o.output+=(m.output||0); o.total+=(m.total||0); o.inputTotal+=(m.inputTotal||0);
+  });
+  var list=Object.keys(by).map(function(k){return by[k];});
+  // 派生列 hit 用聚合后的合计现算（不是各行比例的再平均），与明细表同口径
+  list.forEach(function(x){ x.hit=hitPct(x.cached, x.inputTotal); });
+  var sum=list.reduce(function(a,x){return a+x.total;},0)||1;
+  var mkey=(MODELSORT.k==='pct')?'total':MODELSORT.k;   // 占比 → 按总词元排
+  list.sort(function(a,b){
+    var x=a[mkey], y=b[mkey];
+    if(typeof x==='string'){ return MODELSORT.d*(x<y?-1:x>y?1:0); }
+    return MODELSORT.d*((x||0)-(y||0));
+  });
+  var html='<thead><tr>'+modelCols().map(function(c){
+    return '<th data-k="'+c[0]+'" style="cursor:pointer">'+c[1]+
+      (MODELSORT.k===c[0]?(MODELSORT.d>0?' ▲':' ▼'):'')+'</th>';
+  }).join('')+'</tr></thead><tbody>';
+  list.forEach(function(x){
+    html+='<tr><td class="mono">'+esc(x.model)+'</td><td class="mono">'+esc(x.provider)+'</td><td>'+fmt(x.req)+
+      '</td><td title="'+fmt(x.fresh)+' 词元">'+Mx(x.fresh)+'</td>'+
+      '<td title="'+fmt(x.cached)+' 词元">'+Mx(x.cached)+'</td>'+
+      '<td title="占输入合计">'+pctCell(x.hit)+'</td>'+
+      '<td title="'+fmt(x.output)+' 词元">'+Mx(x.output)+'</td>'+
+      '<td title="'+fmt(x.total)+' 词元"><b>'+Mx(x.total)+'</b></td>'+
+      '<td>'+(x.total/sum*100).toFixed(1)+'%</td></tr>';
+  });
+  html+='</tbody>';
+  var tm=document.getElementById('tblModel');
+  tm.innerHTML=html;
+  document.getElementById('mNote').textContent=note;
+  bindSortTh(tm,function(k){
+    if(MODELSORT.k===k){ MODELSORT.d=-MODELSORT.d; } else { MODELSORT.k=k; MODELSORT.d=-1; }
+    saveSort(MODEL_SORT_KEY,MODELSORT);
+    renderModels();
+  });
+}
+
+// 单会话表的列定义与取行。注意语义：表里的数据是后端「按总词元取的前 60 条」里再切前 20 条，
+// 排序只在这 20 行内换序。
+// 首列排序键 'title' 取的就是显示用的标题（无标题回退会话 ID 前 8 位），与屏幕内容一致。
+function sessCols(){
+  return [['title','会话标题'],['req','请求数'],['total','总词元'],['output','输出']];
+}
+function sessSortKey(s){
+  var sid=String(s.session==null?'':s.session);
+  return s.title || shortSid(sid);
+}
+// 会话 ID 的短形式。DSH 的会话 ID 是 `session-<uuid>`（早期版本是裸 uuid），
+// 所以不能直接取前 8 位 —— 那样每个会话都会显示成一模一样的「session-」。
+// 先剥掉 `session-` 前缀，再取前 8 位。
+function shortSid(sid){
+  var s=String(sid==null?'':sid);
+  if(s.indexOf('session-')===0) s=s.slice(8);
+  return s.slice(0,8);
+}
+function sessRows(){
+  var rows=DATA.sessions.slice(0,20).map(function(s){
+    // fresh / cached 只用于总词元列的悬停提示，不参与排序
+    return {title:sessSortKey(s), req:s.req, total:s.total, output:s.output,
+            fresh:(s.fresh||0), cached:(s.cached||0), s:s};
+  });
+  rows.sort(function(a,b){
+    var x=a[SESSSORT.k], y=b[SESSSORT.k];
+    if(typeof x==='string'){ return SESSSORT.d*(x<y?-1:x>y?1:0); }
+    return SESSSORT.d*((x||0)-(y||0));
+  });
+  return rows;
+}
+function renderSessions(){
+  if(SESS_DRAG) return;   // 拖动列宽时别重建表头，否则把手会闪断
+  // colgroup：固定布局下由它决定列宽（见 CSS 的 #tblSess{table-layout:fixed}）。
+  // 必须和 sessCols() 一一对应，顺序错了整张表就错位。
+  var colCls=['c-sess','c-req','c-total','c-out'];   // 与 CSS 里的 col 宽一一对应
+  var html='<colgroup>'+colCls.map(function(c){
+    return c ? '<col class="'+c+'">' : '<col>';
+  }).join('')+'</colgroup>';
+  html+='<thead><tr>'+sessCols().map(function(c,i){
+    var mark=(SESSSORT.k===c[0])?(SESSSORT.d>0?' ▲':' ▼'):'';
+    // 首列多一个拖拽把手（Excel 式钉在列右边界）；把手必须在 th 内且带 .sessgrip，
+    // 点它不算排序——bindSortTh 里挡掉了
+    return (i===0)
+      ? '<th class="sessh" data-k="'+c[0]+'" style="cursor:pointer">'+c[1]+mark+'<span class="sessgrip"></span></th>'
+      : '<th data-k="'+c[0]+'" style="cursor:pointer">'+c[1]+mark+'</th>';
+  }).join('')+'</tr></thead><tbody>';
+  sessRows().forEach(function(r){
+    var s=r.s;
+    var sid=String(s.session==null?'':s.session);
+    var short=shortSid(sid);
+    var full=s.title||'';
+    // 悬停给全量信息：完整标题 + 工作目录 + 完整会话 ID（同名会话靠 ID 区分）
+    var tipv=(full||'(无标题)')+(s.cwd?'\n'+s.cwd:'')+'\n'+sid;
+    // 标题不再在 JS 里截字符：整串交给 CSS，由 --sess-w 决定露出多少、自动补省略号
+    // 总词元列的悬停：复用图表那套 data-tipx 三列网格（标签 / 数值 / 占比）。
+    // 占比分母统一用 **总词元**（= 未缓存 + 缓存 + 写入 + 输出）。
+    //
+    // ⚠️ 舍入必须「先分量、后合计反推」，不能让三行各自独立 toFixed(1)：
+    // 「输入合计」恒等于「缓存命中 + 未缓存输入」，两个分量各自舍入后
+    // 极可能与合计的独立舍入差 0.1%，表现为「98.9% 却显示 98.8%」。
+    var inSum=(r.fresh||0)+(r.cached||0);
+    var tot=r.total||0;
+    var tpx=null;
+    if(tot>0){
+      var r1=function(v){ return Math.round(v/tot*1000)/10; };   // 保留 1 位小数的数值
+      var fPct=r1(r.cached), nPct=r1(r.fresh);
+      var pv=function(n){ return '占比 '+n.toFixed(1)+'%'; };
+      tpx={ r:[['缓存命中',   fmt(r.cached)+' 词元', pv(fPct)],
+              ['未缓存输入', fmt(r.fresh)+' 词元',  pv(nPct)],
+              ['输入合计',   fmt(inSum)+' 词元',    pv(fPct+nPct)]] };
+    }
+    var totalTd=tpx
+      ? '<td data-tipx="'+esc(JSON.stringify(tpx))+'"><b>'+Mx(r.total)+'</b></td>'
+      : '<td><b>'+Mx(r.total)+'</b></td>';
+    // 标题与短 ID 包在同一个 flex 行 .sline 里：标题 flex:1 + 省略号，ID flex:none。
+    // 这样 .sline 的宽正好是 --sess-w，截断点与列右边界（把手所在处）只差固定留白。
+    html+='<tr><td class="sess" title="'+esc(tipv)+'">'+
+      '<span class="sline">'+
+      '<span class="st">'+esc(full||short)+'</span>'+
+      '<span class="sid mono">'+esc(short)+'</span>'+
+      '</span></td>'+
+      '<td>'+fmt(s.req)+
+      '</td>'+totalTd+
+      '<td title="'+fmt(s.output)+' 词元">'+Mx(s.output)+'</td></tr>';
+  });
+  html+='</tbody>';
+  var ts=document.getElementById('tblSess');
+  ts.innerHTML=html;
+  bindSortTh(ts,function(k){
+    if(SESSSORT.k===k){ SESSSORT.d=-SESSSORT.d; } else { SESSSORT.k=k; SESSSORT.d=-1; }
+    saveSort(SESS_SORT_KEY,SESSSORT);
+    renderSessions();
+  });
+  applySessW();
+  clampSessWToFit();   // 表格刚渲染完、布局可测：把宽度收进装得下的范围
+}
+
+// 月度汇总的列定义与取行：顺序即表头顺序，键名同时是排序键（与 th 的 data-k 对应）。
+// 后端已直接下发 fresh / cached / cwrite / output / total，不必再从前端做减法。
+function monthCols(){
+  return [['month','月份'],['req','请求数'],['fresh','未缓存输入'],['cached','缓存命中'],
+          ['cwrite','缓存写入'],['output','输出'],['total','总词元']];
+}
+function monthRows(){
+  var rows=DATA.months.map(function(m){
+    return {month:m.month, req:m.req, fresh:m.fresh||0, cached:m.cached||0,
+            cwrite:m.cwrite||0, output:m.output||0, total:m.total||0};
+  });
+  rows.sort(function(a,b){
+    var x=a[MSORT.k], y=b[MSORT.k];
+    if(typeof x==='string'){ return MSORT.d*(x<y?-1:x>y?1:0); }
+    // 数值列用 (x||0)：某列可能整月为 0 或缺失，不能让它变 NaN 把排序打乱
+    return MSORT.d*((x||0)-(y||0));
+  });
+  return rows;
+}
+function renderMonths(){
+  var html='<thead><tr>'+monthCols().map(function(c){
+    return '<th data-k="'+c[0]+'" style="cursor:pointer">'+c[1]+
+      (MSORT.k===c[0]?(MSORT.d>0?' ▲':' ▼'):'')+'</th>';
+  }).join('')+'</tr></thead><tbody>';
+  monthRows().forEach(function(m){
+    html+='<tr><td>'+m.month+'</td><td>'+fmt(m.req)+
+      '</td><td title="'+fmt(m.fresh)+' 词元">'+Mx(m.fresh)+'</td>'+
+      '<td title="'+fmt(m.cached)+' 词元">'+Mx(m.cached)+'</td>'+
+      '<td title="'+fmt(m.cwrite)+' 词元">'+Mx(m.cwrite)+'</td>'+
+      '<td title="'+fmt(m.output)+' 词元">'+Mx(m.output)+'</td>'+
+      '<td title="'+fmt(m.total)+' 词元"><b>'+Mx(m.total)+'</b></td></tr>';
+  });
+  html+='</tbody>';
+  var t=document.getElementById('tblMonth');
+  t.innerHTML=html;
+  // 表头每次重渲染都要重新绑（innerHTML 会把旧节点连同 onclick 一起丢掉）。
+  // 与明细表同一套写法：先点某列 → 该列降序，再点同一列 → 反转
+  bindSortTh(t,function(k){
+    if(MSORT.k===k){ MSORT.d=-MSORT.d; }
+    else { MSORT.k=k; MSORT.d=-1; }   // 换新列一律先降序
+    saveSort(MONTH_SORT_KEY,MSORT);   // 记住这次点击：刷新后仍是这个列与方向
+    renderMonths();
+  });
+}
+
+function renderAll(){
+  renderCards(); renderChart(); renderDaily(); renderModels(); renderSessions(); renderMonths();
+}
+
+// 版本显示与「代码更新自动重载」是两件不同的事，故意分开：
+//   * 版本号：前端取自本文件的 FE_VER，后端取自 /api/data 的 serverVersion
+//   * 自动重载：仍靠 htmlMtime（HTML 文件自身的 mtime）。版本号没变但文件改过
+//     时这个通道照样要能触发重载，所以两者不能合并成同一个字段
+var HTML_MTIME=null, SRV_VER='';
+function verText(){
+  return '　页面版本 '+FE_VER+(SRV_VER?' ｜ 服务版本 '+SRV_VER:'');
+}
+function renderVer(){
+  var el=document.getElementById('ver');
+  if(el) el.textContent=verText();
+}
+function checkPageVer(mtime, srvVer){
+  if(srvVer && srvVer!==SRV_VER){ SRV_VER=srvVer; renderVer(); }
+  if(!mtime) return;
+  if(HTML_MTIME===null){ HTML_MTIME=mtime; renderVer(); return; }
+  if(mtime!==HTML_MTIME){
+    var el=document.getElementById('ver');
+    if(el) el.textContent=verText()+'　检测到代码已更新，正在自动重载…';
+    setTimeout(function(){ location.reload(); }, 700);
+  }
+}
+
+// 两类需要人知道的情况都进这个红框：整轮扫描失败，以及「有记录被跳过」。
+// 后者是静默少算（统计偏低但页面一切正常），不主动报出来没人会发现。
+function warnHTML(j){
+  var w=[];
+  if(j.scanError) w.push('扫描告警：'+esc(j.scanError));
+  if(j.parseSkipped) w.push('有 '+fmt(j.parseSkipped)+' 条请求记录的字段类型异常，已跳过 —— 总词元可能略低于实际。详见服务日志。');
+  return w.length ? '<div class="errbox">'+w.join('<br>')+'</div>' : '';
+}
+
+function load(force){
+  fetch(BASE+'api/data'+(force?'?force=1':'')).then(function(r){
+    if(!r.ok) throw new Error('HTTP '+r.status);
+    return r.json();
+  }).then(function(j){
+    DATA=j;
+    checkPageVer(j.htmlMtime, j.serverVersion);
+    var st=document.getElementById('status'), dot=document.getElementById('dot');
+    dot.className='dot'+(j.building?' busy':'');
+    st.textContent='数据更新于 '+(j.generatedAt||'').slice(11,19)+'　每 '+j.refreshSec+' 秒自动刷新';
+    document.getElementById('span').textContent=((j.span&&j.span.from)||'').slice(0,10)+' ~ '+((j.span&&j.span.to)||'').slice(0,10);
+    document.getElementById('recn').textContent=fmt(j.recordCount);
+    document.getElementById('err').innerHTML=warnHTML(j);
+    initPickers();
+    syncBtns();
+    renderAll();
+  }).catch(function(e){
+    document.getElementById('dot').className='dot err';
+    document.getElementById('status').textContent='读取失败：'+e.message;
+  });
+}
+
+// 预设按钮（今日 / 近 N 天 / 全部）与两个自选按钮，都通过 setRange 收口
+function setRange(v){
+  RANGE=v;
+  saveRange();                     // 记忆范围：刷新后回到这里
+  var hm=isHourMode();
+  SORT={k:hm?'hour':'date', d:hm?1:-1};
+  saveSort(DAILY_SORT_KEY,SORT);   // 重置也写记忆：保证「刷新后恢复的排序 = 此刻屏上的排序」
+  closePops();
+  syncBtns();
+  renderAll();
+}
+document.querySelectorAll('button[data-r]').forEach(function(b){
+  b.onclick=function(){
+    var v=b.getAttribute('data-r');
+    setRange((v==='today') ? 'today' : parseInt(v,10));
+  };
+});
+document.getElementById('reload').onclick=function(){ load(true); };
+
+// 按钮高亮与自选按钮文案都以脚本里的 RANGE 为准，避免 HTML 与默认值不一致
+function syncBtns(){
+  document.querySelectorAll('button[data-r]').forEach(function(x){
+    var v=(RANGE==='today')?'today':String(RANGE);
+    if(x.getAttribute('data-r')===v) x.classList.add('on'); else x.classList.remove('on');
+  });
+  var bd=document.getElementById('btnDay'), br=document.getElementById('btnRng');
+  if(!bd||!br) return;
+  var pd=pickedDay(), sp=pickedSpan();
+  bd.classList.toggle('on', !!pd);
+  br.classList.toggle('on', !!sp);
+  bd.textContent = pd ? (pd.slice(5)+' ▾') : '自选某天 ▾';
+  br.textContent = sp ? (sp.from.slice(5)+'~'+sp.to.slice(5)+' ▾') : '自选区间 ▾';
+}
+
+function closePops(){
+  document.querySelectorAll('.pop').forEach(function(p){ p.classList.remove('open'); });
+}
+function openPop(id){
+  var p=document.getElementById(id);
+  var was=p.classList.contains('open');
+  closePops();
+  if(!was) p.classList.add('open');
+}
+function flashMsg(id,txt){
+  var el=document.getElementById(id);
+  if(el) el.textContent=txt||'';
+}
+// 日历输入框的上下限锁定在数据覆盖范围内，并给出合理初值（只填空值，不覆盖用户已改的）
+function initPickers(){
+  if(!DATA) return;
+  var from=((DATA.span&&DATA.span.from)||'').slice(0,10);
+  var to=((DATA.span&&DATA.span.to)||'').slice(0,10);
+  ['inpDay','inpFrom','inpTo'].forEach(function(id){
+    var el=document.getElementById(id);
+    if(!el) return;
+    if(from) el.min=from;
+    if(to) el.max=to;
+  });
+  var dEl=document.getElementById('inpDay');
+  if(dEl && !dEl.value) dEl.value=focusDate()||to;
+  var fEl=document.getElementById('inpFrom'), tEl=document.getElementById('inpTo');
+  var sd=sliceDays();
+  if(fEl && !fEl.value) fEl.value=sd.length?sd[0].date:from;
+  if(tEl && !tEl.value) tEl.value=sd.length?sd[sd.length-1].date:to;
+}
+
+document.getElementById('btnDay').onclick=function(e){
+  if(e&&e.stopPropagation) e.stopPropagation();
+  flashMsg('msgDay','');
+  openPop('popDay');
+};
+document.getElementById('btnRng').onclick=function(e){
+  if(e&&e.stopPropagation) e.stopPropagation();
+  flashMsg('msgRng','');
+  openPop('popRng');
+};
+document.querySelectorAll('.pop').forEach(function(p){
+  p.onclick=function(e){ if(e&&e.stopPropagation) e.stopPropagation(); };
+});
+document.querySelectorAll('button[data-close]').forEach(function(b){
+  b.onclick=function(e){ if(e&&e.stopPropagation) e.stopPropagation(); closePops(); };
+});
+document.addEventListener('click',function(){ closePops(); });
+
+document.getElementById('okDay').onclick=function(){
+  var v=document.getElementById('inpDay').value;
+  if(!v){ flashMsg('msgDay','请先在日历里选一个日期'); return; }
+  setRange('day:'+v);
+};
+document.getElementById('okRng').onclick=function(){
+  var a=document.getElementById('inpFrom').value;
+  var b=document.getElementById('inpTo').value;
+  if(!a && !b){ flashMsg('msgRng','请至少选择一个日期'); return; }
+  if(!a) a=b;
+  if(!b) b=a;
+  if(a>b){ var t=a; a=b; b=t; }
+  setRange('rng:'+a+'..'+b);
+};
+syncBtns();
+
+// data-tipx 存结构化三列（JSON），渲染成网格让「标签左对齐 / 数值右对齐 / 占比左对齐」
+function tipHTML(el){
+  var raw=el.getAttribute('data-tipx');
+  if(!raw) return null;
+  var p=null;
+  try{ p=JSON.parse(raw); }catch(err){ return null; }
+  if(!p||!p.r||!p.r.length) return null;
+  var h='<div class="tt">';
+  if(p.t) h+='<div class="tt-h">'+esc(p.t)+'</div>';
+  p.r.forEach(function(r){
+    h+='<span>'+esc(r[0])+'</span><span class="tt-v">'+esc(r[1])+'</span><span>'+esc(r[2])+'</span>';
+  });
+  if(p.f) h+='<span class="tt-f">'+esc(p.f[0])+'</span><span class="tt-v">'+esc(p.f[1])+'</span>'
+           +'<span>'+esc(p.f[2]||'')+'</span>';
+  return h+'</div>';
+}
+
+document.addEventListener('mousemove',function(e){
+  var el=e.target.closest?e.target.closest('[data-tip],[data-tipx]'):null;
+  if(!el){ if(tip.style.display!=='none') tip.style.display='none'; return; }
+  var h=tipHTML(el);
+  if(h){
+    if(tip.innerHTML!==h) tip.innerHTML=h;
+  } else {
+    var txt=el.getAttribute('data-tip');
+    if(!txt){ if(tip.style.display!=='none') tip.style.display='none'; return; }
+    if(tip.textContent!==txt) tip.textContent=txt;
+  }
+  if(tip.style.display!=='block') tip.style.display='block';
+  var tw=tip.offsetWidth, th=tip.offsetHeight;
+  var lx=e.clientX, ly=e.clientY-10;
+  if(lx-tw/2<6) lx=tw/2+6;
+  if(lx+tw/2>window.innerWidth-6) lx=window.innerWidth-6-tw/2;
+  if(ly-th<6) ly=e.clientY+22;
+  tip.style.left=lx+'px'; tip.style.top=ly+'px';
+});
+
+// 会话标题列宽：先从 localStorage 恢复，再挂上表头把手的拖拽（表格还没渲染也没关系，
+// 委托挂在 document 上，innerHTML 重建不影响）
+loadSessW(); applySessW(); initSessGrip();
+
+load(false);
+setInterval(function(){ load(false); }, 30000);
+var rt=null;
+window.addEventListener('resize',function(){
+  if(!DATA) return;
+  clampSessWToFit();   // 窗口变窄时同步把列宽收进新上限，不留超宽残留
+  clearTimeout(rt);
+  rt=setTimeout(function(){ renderChart(); }, 160);
+});
+
+// 「每日词元构成」的滚轮：按光标落点分两种行为 ——
+//   ① 压在下方横向滚动条那条细条上 → **缩放**视窗天数（无级，7~30 天）：以视窗正中那根柱
+//      为锚对齐，所以放大是向中间收拢、不往一侧偏；
+//   ② 落在柱状图区域内 → **左右平移**可视区（等价于拖动滚动条），向下滚看更晚的日期。
+// 两者都只在「确实有横向滚动条」时生效；没有溢出时一律放行、页面照常纵向滚动。
+//
+// 顶到边界之后滚轮归谁（与「每日明细」那种原生滚动容器的手感对齐）：
+//   连续滚 → 吞掉事件：图表不动，页面也不动。不吞的话，光标停在图表上继续滚会让整个主页面
+//   突然上下跳；
+//   **停顿一下再滚** → 把滚轮交还给页面，页面开始上下滚。判「停顿」只看相邻两次滚轮事件的
+//   时间间隔（WHEEL_PAUSE），鼠标不用移动；交还之后只要还停在边界就一直归页面；
+//   而一旦反向滚回图表内部（那边仍有余量），立刻重新夺回。
+// 「光标是否压在滚动条上」用几何判断：clientHeight 是内容区高度（不含横向滚动条），
+// offsetHeight 含它，两者之差就是滚动条高度；没有溢出时差为 0。
+var WHEEL_PAUSE=250;   // ms：两次滚轮间隔超过它，就算「停顿过」
+(function(){
+  var box=document.getElementById('chart');
+  if(!box || !box.addEventListener) return;
+  var lastTs=0, gap=1e9, edgeHeld=false, outer=false;
+  // 边界处的滚轮归属：返回 true = 这一次让给页面（调用方直接 return，别 preventDefault）；
+  // 返回 false = 已经吞掉这一次（页面不动），图表也推不动了。
+  function handOff(e){
+    if(outer) return true;                                       // 已交还 → 保持放行，页面继续滚
+    if(edgeHeld && gap>WHEEL_PAUSE){ outer=true; return true; }  // 上一次也卡边界 + 这次停过手
+    edgeHeld=true;                                               // 还在连续滚 → 接着吞
+    e.preventDefault();
+    return false;
+  }
+  box.addEventListener('wheel',function(e){
+    var sbH=box.offsetHeight-box.clientHeight;             // 横向滚动条高度；无溢出时为 0
+    if(sbH<=0) return;                                     // 没溢出 → 完全不干预
+    var ts=(typeof e.timeStamp==='number' && e.timeStamp) ? e.timeStamp : Date.now();
+    gap=ts-lastTs; lastTs=ts;
+    var dy=e.deltaY||0, dx=e.deltaX||0;
+    if(e.deltaMode===1){ dy*=16; dx*=16; }                 // 按「行」报的（Firefox）折算成像素
+    else if(e.deltaMode===2){ dy*=100; dx*=100; }          // 按「页」报的
+    if(!dy && !dx) return;
+    if(e.clientY-box.getBoundingClientRect().top>=box.clientHeight){
+      // ① 压在横向滚动条上 → 缩放。以横向为主的手势（触摸板双指横滑）不当作缩放。
+      if(Math.abs(dy)<=Math.abs(dx)) return;
+      var next=visDays*Math.pow(1.002,dy);                 // 向上滚放大（视窗天数变小），向下滚缩小
+      if(next<CHART_VIS_MIN) next=CHART_VIS_MIN;
+      if(next>CHART_VIS_DAYS) next=CHART_VIS_DAYS;
+      if(Math.abs(next-visDays)<1e-6){ handOff(e); return; }   // 已经顶在 7 天 / 30 天上了
+      outer=false; edgeHeld=false;                         // 缩放真的动了 → 重新夺回滚轮
+      e.preventDefault();
+      visDays=next;
+      CHART_ZOOM=true;                                     // 告诉 renderChart：这次要把视窗中心留住
+      renderChart();
+      return;
+    }
+    // ② 落在柱状图区域内 → 左右平移。横向手势优先取 deltaX（触摸板双指横滑很自然），
+    //    否则把纵向滚折算成横向：一格滚轮约 100px，约等于 1/9 个视窗宽。
+    var move=(Math.abs(dx)>Math.abs(dy)) ? dx : dy;
+    var maxSL=Math.max(0, box.scrollWidth-box.clientWidth);
+    var target=Math.max(0, Math.min(box.scrollLeft+move, maxSL));
+    if(Math.abs(target-box.scrollLeft)<0.5){ handOff(e); return; }   // 已顶到最左 / 最右
+    outer=false; edgeHeld=false;                           // 图表能动 → 重新夺回滚轮
+    e.preventDefault();
+    box.scrollLeft=target;
+    syncAxis();                                            // 纵轴刻度跟着新的可见范围走
+  },{passive:false});
+  // 横向滚动（拖动滚动条 / 上面那条滚轮平移 / 触摸板）后同步纵轴刻度。只重写 #yaxis、
+  // 不碰 #chart，所以不会再触发 scroll，无重入风险。
+  box.addEventListener('scroll',syncAxis);
+})();
+</script></body></html>
