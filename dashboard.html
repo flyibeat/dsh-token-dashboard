@@ -166,7 +166,8 @@ td .mu{font-size:11px;font-weight:500;color:var(--tx2);margin-left:2px}
 <div id="err"></div>
 
 <div class="tabs" style="margin-bottom:12px">
-  <button class="btn on" data-r="today">今日（按小时）</button>
+  <button class="btn on" data-r="today">今日</button>
+  <button class="btn" data-r="yday" title="数据里最新一天的前一天">昨日</button>
   <button class="btn" data-r="7">近 7 天</button>
   <button class="btn" data-r="14">近 14 天</button>
   <button class="btn" data-r="30">近 30 天</button>
@@ -255,11 +256,13 @@ function loadSort(lsKey,def,valid){
 function saveSort(lsKey,o){ try{ localStorage.setItem(lsKey,JSON.stringify({k:o.k,d:o.d})); }catch(e){} }
 
 // 时间范围记忆：记住上次选的范围，刷新页面后自动回到那个范围。
-// 取值范围与按钮的 data-r 一一对应：'today' | 0（全部）| 7 | 14 | 30 | 'day:YYYY-MM-DD' | 'rng:A..B'。
+// 取值范围与按钮的 data-r 一一对应：'today' | 'yday' | 0（全部）| 7 | 14 | 30 | 'day:YYYY-MM-DD' | 'rng:A..B'。
+// 'today' / 'yday' 是**相对**日期：跨过零点后仍指向「新的今天」「新的昨天」，所以只存这个标记、
+// 不把日期写死进记忆（把 'day:2026-10-22' 存进去，第二天刷新就还是 22 号，成了错的「昨日」）。
 // 用白名单校验而不是直接信任记忆：值可能是旧版本留下的、也可能被手工改过。
 var RANGE_KEY='dsh_range', RANGE_PRESETS=[0,7,14,30];
 function validRange(v){
-  if(v==='today') return true;
+  if(v==='today' || v==='yday') return true;
   if(typeof v==='number') return RANGE_PRESETS.indexOf(v)>=0;
   if(typeof v==='string'){
     return /^day:\d{4}-\d{2}-\d{2}$/.test(v) || /^rng:\d{4}-\d{2}-\d{2}\.\.\d{4}-\d{2}-\d{2}$/.test(v);
@@ -346,7 +349,7 @@ function bindSortTh(t,onPick){
 var BASE=location.pathname.replace(/[^\/]*$/,'');
 // 前端版本号：改了这个文件就改这一行。后端版本号在 usage_server.py 的 BE_VER，
 // 由 /api/data 带过来，页头会同时显示两者。
-var FE_VER='v1.0.0';
+var FE_VER='v1.0.1';
 var tip=document.getElementById('tip');
 
 function fmt(n){ n=Number(n||0); return n.toLocaleString('en-US'); }
@@ -478,9 +481,22 @@ function initSessGrip(){
     SESS_W=SESS_W_DEF; applySessW(); saveSessW();
   });
 }
-function isHourMode(){ return RANGE==='today' || !!pickedDay(); }
+function isHourMode(){ return RANGE==='today' || RANGE==='yday' || !!pickedDay(); }
 function todayDate(){
   return DATA && DATA.days.length ? DATA.days[DATA.days.length-1].date : null;
+}
+// 「昨日」与「今日」同一口径：都以**数据里最新的一天**为锚，不看系统时钟。
+// 不取「日历昨天」是因为跨越零点、或当天还没产生请求时，日历口径会落到一个
+// 数据里根本没有的日期上（页面会显示成「昨日 无任何请求记录」）。只有一个日期时返回 null。
+function ydayDate(){
+  var ds=DATA&&DATA.days?DATA.days:[];
+  return ds.length>1 ? ds[ds.length-2].date : null;
+}
+// 单日视图的统一取日：'today' / 'yday' / 'day:YYYY-MM-DD' 三种都收敛到这里
+function dayOf(range){
+  if(range==='today') return todayDate();
+  if(range==='yday') return ydayDate();
+  return pickedDay();
 }
 // 自选单日：RANGE = 'day:YYYY-MM-DD'
 function pickedDay(){
@@ -494,16 +510,24 @@ function pickedSpan(){
   var p=s.slice(4).split('..');
   return {from:p[0], to:p[1]||p[0]};
 }
-function focusDate(){ return RANGE==='today' ? todayDate() : pickedDay(); }
+function focusDate(){ return dayOf(RANGE); }
 function rangeLabel(){
   if(RANGE==='today') return '今日';
+  if(RANGE==='yday') return '昨日';
   var d=pickedDay(); if(d) return d;
   var sp=pickedSpan(); if(sp) return sp.from+' ~ '+sp.to;
   return RANGE ? ('近 '+RANGE+' 天') : '全部';
 }
+// 单日视图的短称呼：今日 / 昨日 / 当日（自选某天）。标题、卡片、表头文案统一走它，
+// 免得同一个页面上出现「今日」和「当日」两种叫法。
+function dayShort(){ return RANGE==='today'?'今日':(RANGE==='yday'?'昨日':'当日'); }
 function sliceDays(){
   var ds=DATA.days;
   if(RANGE==='today') return ds.length?[ds[ds.length-1]]:[];
+  if(RANGE==='yday'){
+    var yd=ydayDate();
+    return yd ? ds.filter(function(x){ return x.date===yd; }) : [];
+  }
   var d=pickedDay();
   if(d) return ds.filter(function(x){ return x.date===d; });
   var sp=pickedSpan();
@@ -532,6 +556,9 @@ function hoursOf(d){
   return out;
 }
 function todayHours(){ return hoursOf(focusDate()); }
+// 单日视图的小时行：无日期（如「昨日」但数据只有一天）时返回空表而不是造 24 行假零，
+// 让卡片、图表、明细表都走各自的空态分支，而不是显示一整屏 0。
+function dayHours(){ return focusDate() ? todayHours() : []; }
 function hourLabel(h){ return h+':00'; }
 
 function renderCards(){
@@ -544,9 +571,12 @@ function renderCards(){
   var cards=[];
   if(isHourMode()){
     var last=s[0]||{}, cd=focusDate()||'';
-    var dl=(RANGE==='today')?'今日':'当日';
+    // 三种单日视图的措辞：今日 / 昨日 / 自选某天（当日）
+    var dl=dayShort();
     if(!last.date){
-      cards.push([dl+'数据', '—', (cd||'所选日期')+' 无任何请求记录']);
+      var emptyHint=(cd||'所选日期')+' 无任何请求记录';
+      if(!cd && RANGE==='yday') emptyHint='数据里只有一天，没有更早的日期；请改用「自选某天」';
+      cards.push([dl+'数据', '—', emptyHint]);
     } else {
       var idx=-1;
       DATA.days.forEach(function(x,i){ if(x.date===cd) idx=i; });
@@ -554,6 +584,7 @@ function renderCards(){
       var hint=fmt(last.total)+' 词元';
       if(prev && prev.total){
         var delta=(last.total-prev.total)/prev.total*100;
+        // 今日比「昨日」，昨日则比「前一日」——两者都取数据里紧邻的上一天，口径一致
         hint+='　'+(RANGE==='today'?'较昨日':('较 '+prev.date.slice(5)))+' '+(delta>=0?'+':'')+delta.toFixed(0)+'%';
       }
       cards.push([dl+'总词元', Mlabel(last.total), hint]);
@@ -610,7 +641,7 @@ function segsOf(d){
 
 function renderChart(){
   var hm=isHourMode();
-  var rows=hm?todayHours():sliceDays();
+  var rows=hm?dayHours():sliceDays();
   var label=function(r){ return hm?r.hour:r.date.slice(5); };
   var n=rows.length||1;
   var ybox=document.getElementById('yaxis');
@@ -623,7 +654,9 @@ function renderChart(){
   var padT=14, padB=46, H=224;
   // 范围 / 天数变了 → 复位缩放与滚动位置（回到视窗 30 天、停在最右）；
   // 若是滚轮缩放引起的渲染，就以「视窗正中那根柱」为锚对齐。
-  var ck=String(RANGE)+'|'+n+'|'+(hm?'h':'d');
+  // 缓存键要带上「落到哪一天」：'today'/'yday' 的 RANGE 字符串跨天不变，但数据变了，
+  // 只用 RANGE 当键会让昨天的视野与滚动位置被今天的渲染沿用。
+  var ck=String(RANGE)+'|'+n+'|'+(hm?'h':'d')+'|'+(hm?(focusDate()||''):'');
   var keep;
   if(ck!==CHART_KEY){ CHART_KEY=ck; visDays=CHART_VIS_DAYS; keep='right'; }
   else if(CHART_ZOOM){ keep='anchor'; }
@@ -701,11 +734,16 @@ function renderChart(){
   box.scrollLeft=sl;
   var cd=focusDate(), sp=pickedSpan();
   var noteTxt;
-  if(hm){ noteTxt=(cd||'—')+' 共 24 小时'; }
+  if(hm){
+    // 「昨日」在只有一天数据时锁定不到日期（ydayDate 返回 null），这里说清楚原因，
+    // 而不是显示一根没有日期的小时图
+    noteTxt=cd ? (cd+' 共 24 小时')
+               : (RANGE==='yday' ? '数据里只有一天，暂无昨日' : '无数据');
+  }
   else if(sp){ noteTxt=sp.from.slice(5)+' ~ '+sp.to.slice(5)+'，'+rows.length+' 天'+(n>vd?'，可横向拖动':''); }
   else { noteTxt=n+' 天'+(n>vd?'，可横向拖动':''); }
   document.getElementById('chartTitle').innerHTML=
-    (hm?(RANGE==='today'?'今日分时词元构成':'当日分时词元构成'):'每日词元构成')+
+    (hm?(dayShort()+'分时词元构成'):'每日词元构成')+
     ' <small id="chartNote">（'+noteTxt+'）</small>';
   var noteBox= hm
     ? '每根柱是<b>该小时</b>内全部 API 请求的词元总和。缓存命中部分是每轮重发的历史上下文，量大但单价最低；<b>未缓存输入 + 输出</b>才是该小时真正新增的计算量。'
@@ -731,7 +769,7 @@ function renderDaily(){
   var hm=isHourMode();
   // 派生列（hit）必须挂在行的副本上：todayHours() 直接返回 DATA 内部数组，
   // 往元素上写字段会污染数据源，下次渲染/其他表都会看到这个多余属性。
-  var rows=(hm?todayHours():sliceDays()).map(function(d){
+  var rows=(hm?dayHours():sliceDays()).map(function(d){
     var o={}; for(var k in d){ o[k]=d[k]; }
     o.hit=hitPct(d.cached, d.inputTotal);
     return o;
@@ -771,7 +809,9 @@ function renderDaily(){
   var t=document.getElementById('tblDaily');
   t.innerHTML=html;
   var extra=(pickedDay()||pickedSpan()) ? (rangeLabel()+' · ') : '';
-  document.getElementById('dailyTitle').innerHTML=(hm?(RANGE==='today'?'今日分时明细':'当日分时明细'):'每日明细')+
+  // 今日 / 昨日这两种相对视图也把落到的具体日期写进小字，避免「昨日」到底是哪天要靠猜
+  if(hm && (RANGE==='today'||RANGE==='yday') && focusDate()) extra=focusDate()+' · ';
+  document.getElementById('dailyTitle').innerHTML=(hm?(dayShort()+'分时明细'):'每日明细')+
     ' <small>'+extra+'点击表头可排序，悬停看精确值（单位 M = 百万词元）；「本表对比」列悬停可看口径说明</small>';
   bindSortTh(t,function(k){
     if(SORT.k===k){ SORT.d=-SORT.d; } else { SORT.k=k; SORT.d=(k==='hour'||k==='date')?(hm?1:-1):-1; }
@@ -797,7 +837,7 @@ function renderModels(){
   if(hm){
     var cd=focusDate();
     rows=DATA.models.filter(function(m){ return m.date===cd; });
-    note='（'+(RANGE==='today'?'今日':cd)+'）';
+    note='（'+(RANGE==='today'?'今日':(RANGE==='yday'?'昨日':cd))+'）';
   } else {
     var sd=sliceDays();
     var lo=sd.length?sd[0].date:'9999-99-99';
@@ -1061,18 +1101,21 @@ function setRange(v){
   syncBtns();
   renderAll();
 }
+// 预设按钮（今日 / 昨日 / 近 N 天 / 全部）与两个自选按钮，都通过 setRange 收口。
+// data-r 有两种形态：字符串档位（today / yday）原样传，数字档位（7 / 14 / 30 / 0）转成 int。
 document.querySelectorAll('button[data-r]').forEach(function(b){
   b.onclick=function(){
     var v=b.getAttribute('data-r');
-    setRange((v==='today') ? 'today' : parseInt(v,10));
+    setRange((v==='today'||v==='yday') ? v : parseInt(v,10));
   };
 });
 document.getElementById('reload').onclick=function(){ load(true); };
 
-// 按钮高亮与自选按钮文案都以脚本里的 RANGE 为准，避免 HTML 与默认值不一致
+// 按钮高亮与自选按钮文案都以脚本里的 RANGE 为准，避免 HTML 与默认值不一致。
+// 字符串档位（today / yday）直接比字符串；数字档位统一 String()，0 也要能匹配「全部」。
 function syncBtns(){
   document.querySelectorAll('button[data-r]').forEach(function(x){
-    var v=(RANGE==='today')?'today':String(RANGE);
+    var v=(typeof RANGE==='string')?RANGE:String(RANGE);
     if(x.getAttribute('data-r')===v) x.classList.add('on'); else x.classList.remove('on');
   });
   var bd=document.getElementById('btnDay'), br=document.getElementById('btnRng');
