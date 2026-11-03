@@ -135,12 +135,31 @@ td .mu{font-size:11px;font-weight:500;color:var(--tx2);margin-left:2px}
 .note{color:var(--tx2);font-size:12px;margin-top:11px;line-height:1.7}
 .note b{font-weight:600;color:var(--tx)}
 /* 会话表列多、标题还要可调宽，1fr:1fr 会让它的「装得下」上限太小。
-   给左栏 1.25 份、右栏 1 份。 */
-.grid2{display:grid;grid-template-columns:1.25fr 1fr;gap:16px}
+   2026-11-03 按用户要求调整比例：左栏（单会话消耗）收窄、右栏（月度汇总）放宽，
+   好让月度表容下新加的「缓存命中率」列。
+
+   为什么左栏写成 minmax(520px,1fr) 而不是一个纯 fr 比例：
+   会话表的**最小**总宽是固定的 —— 标题列降到 SESS_W_FIT_MIN(160)+非文字开销(34)
+   + 请求数(78) + 总词元(106) + 输出(96) = 474px，而面板内边距吃掉 34px，
+   所以左栏面板宽度低于 508px 时会话表必定出横向滚动条。取 520 再留 12px 余量
+   （用户 2026-11-03 反馈 512 时默认仍能看到横向滚动条，再放宽一档）。
+   写成 minmax 就保证「无论窗口多宽，左栏至少 520」：空间够时按 1fr 参与分配，
+   不够时锁定 520、把余下宽度全给右栏 —— 于是缩窄左栏的代价只落在右栏变宽上，
+   不会出现「为了给月度表腾地方，把会话表挤出滚动条」。
+   1220px 容器下实际是左 520 / 右 648（原 1.25:1 是左 655 / 右 524）。 */
+.grid2{display:grid;grid-template-columns:minmax(600px,1fr) 1fr;gap:16px}
+/* 月度汇总的单元格内边距收紧 2px/侧：多了一列「缓存命中率」之后，8 列的自然宽度
+   会超出半栏，收紧后刚好装下、不出横向滚动条。只作用于月度表，
+   明细表 / 模型表的密度保持原样。 */
+#tblMonth th,#tblMonth td{padding-left:6px;padding-right:6px}
 /* grid 项默认 min-width:auto，不会缩到内容宽度以下：任一半栏内容一宽就会顶破容器。
    置 0 后各栏严格按比例分，内部超宽由 .scroll 出横向滚动条兜底。 */
 .grid2>*{min-width:0}
-@media(max-width:820px){.grid2{grid-template-columns:1fr}.wrap{padding:18px 12px 48px}}
+/* 窄屏改单列。断点从 820 提到 1120：两栏并排时，左栏锁 minmax(512px)、右栏还要装下
+   8 列月度表（自然宽约 556px），合计接近 1090 —— 视口低于 ~1120 必定有一栏出横向
+   滚动条。与其让两栏都挤，不如在这个宽度以下直接上下堆叠、各占满宽。
+   （缩到 1024 时实测：并排会让月度表横向溢出 88px，堆叠后为 0。） */
+@media(max-width:1120px){.grid2{grid-template-columns:1fr}.wrap{padding:18px 12px 48px}}
 .tip{position:fixed;pointer-events:none;background:#1f2329;color:#fff;padding:7px 10px;
   border-radius:7px;font-size:12px;line-height:1.55;white-space:pre;text-align:left;z-index:99;
   box-shadow:0 4px 16px rgba(0,0,0,.22);display:none;transform:translate(-50%,-100%)}
@@ -167,7 +186,7 @@ td .mu{font-size:11px;font-weight:500;color:var(--tx2);margin-left:2px}
 
 <div class="tabs" style="margin-bottom:12px">
   <button class="btn on" data-r="today">今日</button>
-  <button class="btn" data-r="yday" title="数据里最新一天的前一天">昨日</button>
+  <button class="btn" data-r="yday" title="按系统日历的昨天">昨日</button>
   <button class="btn" data-r="7">近 7 天</button>
   <button class="btn" data-r="14">近 14 天</button>
   <button class="btn" data-r="30">近 30 天</button>
@@ -227,11 +246,11 @@ td .mu{font-size:11px;font-weight:500;color:var(--tx2);margin-left:2px}
 
 <div class="grid2">
   <div class="panel">
-    <div class="ph"><h2>单会话消耗 Top 20 <small>点击表头可在 Top 20 内排序；灰色为会话 ID 前 8 位；悬停看完整标题与目录；悬停「总词元」看缓存命中/未缓存输入/输入合计及其占总词元的比例；标题宽度 <i class="gripico"></i> 可左右拖调（双击复位）</small></h2></div>
+    <div class="ph"><h2>单会话消耗 Top 20 <small>点击表头排序；灰色为会话 ID 前 8 位；悬停看完整标题与目录、总词元的四分量拆解；标题宽度 <i class="gripico"></i> 可左右拖调（双击复位）</small></h2></div>
     <div class="scroll"><table id="tblSess"></table></div>
   </div>
   <div class="panel">
-    <div class="ph"><h2>月度汇总 <small>点击表头可排序（默认大月在上，小月在下）</small></h2></div>
+    <div class="ph"><h2>月度汇总 <small>点击表头可排序（默认大月在上，小月在下）；「缓存命中率」＝缓存命中 ÷ 输入合计（未缓存输入＋缓存命中＋缓存写入）</small></h2></div>
     <div class="scroll"><table id="tblMonth"></table></div>
   </div>
 </div>
@@ -245,7 +264,7 @@ td .mu{font-size:11px;font-weight:500;color:var(--tx2);margin-left:2px}
 var DAILY_SORT_KEY='dsh_sort_daily', MONTH_SORT_KEY='dsh_sort_month';
 // 排序键白名单：记忆可能是旧版本留下的列名（列改过名/删过列），不校验会把表排成乱序
 var DAILY_SORT_KEYS=['date','hour','req','fresh','cached','cwrite','output','total'];
-var MONTH_SORT_KEYS=['month','req','fresh','cached','cwrite','output','total'];
+var MONTH_SORT_KEYS=['month','req','fresh','cached','cwrite','hit','output','total'];
 function loadSort(lsKey,def,valid){
   try{
     var o=JSON.parse(localStorage.getItem(lsKey)||'null');
@@ -349,7 +368,7 @@ function bindSortTh(t,onPick){
 var BASE=location.pathname.replace(/[^\/]*$/,'');
 // 前端版本号：改了这个文件就改这一行。后端版本号在 usage_server.py 的 BE_VER，
 // 由 /api/data 带过来，页头会同时显示两者。
-var FE_VER='v1.0.1';
+var FE_VER='v1.0.2';
 var tip=document.getElementById('tip');
 
 function fmt(n){ n=Number(n||0); return n.toLocaleString('en-US'); }
@@ -380,10 +399,21 @@ function esc(s){ return String(s==null?'':s).replace(/[&<>"]/g,function(c){
 var SESS_W_DEF=220, SESS_W_MIN=70, SESS_W_MAX=600;
 // 自动收敛时的下限：栏被压得极窄时也不把标题压到看不见，宁可让 .scroll 出横向滚动条
 var SESS_W_FIT_MIN=160;
+var SESS_W_KEY='dsh_sess_w', USER_W_KEY='dsh_sess_w_user';
 var SESS_W=SESS_W_DEF, SESS_DRAG=false;
+// 用户是否亲手拖过标题列：拖过之后自动放大逻辑就永久让位（尊重人的意图）。
+var SESS_USER_SET=false;
 function loadSessW(){
+  // 只有「用户亲手拖过」的宽度才存在 USER_W_KEY 里；SESS_W_KEY 存的是上次实际渲染宽度
+  // （可能是自动放大或自动收敛的结果）。两者必须分开存：
+  // ⚠️ 合并成一个键时，clampSessWToFit() 自动收敛写入的值会在下次加载时被当成「用户设定」，
+  //    于是自动放大逻辑永久让位 —— 本机就是这样让标题一直停在 13 个字的。
   try{
-    var v=parseInt(localStorage.getItem('dsh_sess_w'),10);
+    var u=parseInt(localStorage.getItem(USER_W_KEY),10);
+    if(u>=SESS_W_MIN && u<=SESS_W_MAX){ SESS_W=u; SESS_USER_SET=true; return; }
+  }catch(e){}
+  try{
+    var v=parseInt(localStorage.getItem(SESS_W_KEY),10);
     if(v>=SESS_W_MIN && v<=SESS_W_MAX) SESS_W=v;
   }catch(e){}
 }
@@ -393,6 +423,58 @@ var SESS_COL_EXTRA=34;
 var SESS_OUT_MIN=96;
 // 两个定宽数值列
 var SESS_REQ_W=78, SESS_TOTAL_W=106;
+// 「容器够不够装下这张表」的**统一地板**：标题列按默认宽 SESS_W_DEF 算，
+// 输出列守住 SESS_OUT_MIN —— 只要左栏比它小，默认态就一定会出横向滚动条。
+// 这是唯一真源：.grid2 的 minmax() 下限必须 = 本值（改这里就同步改 CSS）。
+function sessDefaultNeed(){
+  return SESS_W_DEF+SESS_COL_EXTRA+SESS_REQ_W+SESS_TOTAL_W+SESS_OUT_MIN;
+  // = 220+34+78+106+96 = 534
+}
+// 标题列要「整行标题不被截断」需要多宽。
+//
+// 测量方式有个坑：canvas 的 measureText 在本机会少算「行尾中文加标点、以及若干常见汉字」的宽度，
+// 实测同一串 `解释分支落后与合并` 量出 117px，而 DOM 里真实占宽 146px（差 25%）。
+// 所以这里**不用 canvas**，改用 DOM 克隆法：把一个 `white-space:nowrap` 的 span
+// 用同一套字体/字号渲染出来，读 getBoundingClientRect().width —— 与真实行内排版完全一致。
+// 只用于自动放大（Math.max 取大者），不参与缩小。
+var SESS_FIT_PAD=36, _sessFitW=0, _sessFitKey='';
+function sessFitW(){
+  var tbl=document.getElementById('tblSess');
+  // 缓存键 = 当前 20 行标题拼起来的字符串：标题一变就重算。
+  // ⚠️ 别用「已经算过就返回」的布尔缓存 —— 首次调用时表格还没渲染（标题为空），
+  //    结果会被永久缓存成「默认宽度」，之后再也不更新（本机踩过：fit 一直是 220）。
+  var titles=tbl?tbl.querySelectorAll('td.sess .st'):[];
+  var key='';
+  for(var i=0;i<titles.length;i++){ key+=titles[i].textContent+'\u0001'; }
+  if(_sessFitW && _sessFitKey===key) return _sessFitW;
+  _sessFitKey=key;
+  var widest=0;
+  if(tbl && tbl.querySelectorAll('td.sess .st').length){
+    try{
+      var probe=document.createElement('span');
+      probe.style.cssText='position:absolute;left:-9999px;top:0;visibility:hidden;'+
+                          'white-space:nowrap;font-size:13px;display:inline-block';
+      document.body.appendChild(probe);
+      tbl.querySelectorAll('td.sess .st').forEach(function(e){
+        probe.style.fontFamily=getComputedStyle(e).fontFamily;
+        probe.textContent=e.textContent;
+        var w=probe.getBoundingClientRect().width;
+        if(w>widest) widest=w;
+      });
+      probe.remove();
+    }catch(e){ widest=0; }
+  }
+  if(!widest) widest=SESS_W_DEF;
+  // 短 ID 位宽（直接量 DOM 里那个 .sid；量不到按 8 位等宽 mono ≈48px）
+  var idW=48;
+  try{
+    var sidEl=tbl&&tbl.querySelector('td.sess .sid');
+    if(sidEl){ var w0=Math.ceil(sidEl.getBoundingClientRect().width); if(w0>0) idW=w0; }
+  }catch(e){}
+  // 标题与 ID 之间的 6px 间距 + 省略号/取整余量
+  _sessFitW=Math.ceil(widest)+idW+6+SESS_FIT_PAD;
+  return _sessFitW;
+}
 
 // 把 --sess-w 落到真实列宽上。
 //
@@ -407,47 +489,82 @@ var SESS_REQ_W=78, SESS_TOTAL_W=106;
 function applySessW(){
   var tbl=document.getElementById('tblSess');
   var cols=tbl?tbl.querySelectorAll('col'):null;
-  if(!cols || cols.length<4){ 
+  if(!cols || cols.length<4){
     document.documentElement.style.setProperty('--sess-w',SESS_W+'px');
     return;
   }
   var sc=tbl.parentNode;
   var avail=(sc&&sc.clientWidth)?sc.clientWidth:0;
+  // 标题列宽**只由 SESS_W 决定**（SESS_W = 表头把手拖出来的宽度）—— 用户拖多少就是多少，
+  // 这是这张表唯一的「可调」入口，不能被任何自动逻辑改写。
+  // ⚠️ 曾经把标题列自动撑到上限来消除右侧空白，结果把手拖到 ≈220px 就顶到上限，
+  //    表现为「标题宽度调不了了」——宽度调节功能被留白修复挤掉了，这个取舍是错的。
+  //
+  // 但「默认太窄导致标题被截」要自动解决，办法是**只往上抬、不往下压**：
+  // 容量允许时把 SESS_W 抬到「整行标题放得下」的宽度（sessFitW()）；
+  // 用户手动拖小后 fit 值已大于 SESS_W，但不会再被撑回去 —— 见下面的 settle()。
+  if(avail){
+    var cap=calSessCap(avail);          // 容器允许的最大标题宽
+    var fit=Math.min(cap, sessFitW());  // 想让「最长标题整行放得下」需要的宽度
+    if(SESS_USER_SET){
+      // 人拖过就以人为准，只做「不超出容器」的收敛（收敛结果不写回 USER_W_KEY）
+      if(SESS_W>cap){ SESS_W=cap; }
+    }else{
+      // 没拖过 → 自动取「放得下」与「默认宽」里较大的那个，永远不缩到看不见
+      var target=Math.max(SESS_W_DEF, fit);
+      if(target!==SESS_W){ SESS_W=target; }
+      saveSessW();
+    }
+  }
+  // ── 列宽：前三列写死，**最后一列（输出）不写死** ──────────────────────────
+  //
+  // 为什么最后一列必须留空：表格宽度用 `width:100%`（跟随容器），浏览器按 colgroup 的
+  // 绝对宽排完前三列后，会把**剩余宽度**自动给没有设定宽的最后一列。
+  // 这样有两件好事：
+  //   ① 竖向滚动条出现/消失时（它要吃掉约 15px），容器宽度变了，表格自动跟着变 ——
+  //      不会再出现「表格按滚动条出现前的宽度算死、结果比容器宽 15px」而冒出横向滚动条；
+  //   ② 右侧不会留白，因为余量天然落在最后一列。
+  // 之前踩的坑正是 ①：表格宽被写成「各列之和」这个死数字，容器一变窄就溢出。
   var sessW=SESS_W+SESS_COL_EXTRA;
-  var rest=SESS_REQ_W+SESS_TOTAL_W;
-  // 「输出」列吃掉剩余宽度；半栏太窄时守一个可读下限（此时表格比容器宽，.scroll 出横向滚动条）
-  var outW=avail?Math.max(SESS_OUT_MIN, avail-sessW-rest):SESS_OUT_MIN;
   cols[0].style.width=sessW+'px';
   cols[1].style.width=SESS_REQ_W+'px';
   cols[2].style.width=SESS_TOTAL_W+'px';
-  cols[3].style.width=outW+'px';
-  // 表格宽 = 各列之和（不留可摊余量，列宽才不会被浏览器按比例放大）
-  tbl.style.width=(sessW+rest+outW)+'px';
+  cols[3].style.width='';                       // 交给浏览器分配余量
+  tbl.style.width='100%';
+  // 表格自身的最小宽度：前三列之和 + 输出列下限。容器比它还窄时才出横向滚动条
+  // （那是用户把标题拖得很宽的主动行为，属于预期）。
+  tbl.style.minWidth=(sessW+SESS_REQ_W+SESS_TOTAL_W+SESS_OUT_MIN)+'px';
   // .sline 用 100% 填满内容盒；这里把变量也同步上，供无 JS 时的 CSS 兜底
   document.documentElement.style.setProperty('--sess-w',SESS_W+'px');
-  document.querySelectorAll('.sessgrip').forEach(function(g){
-    g.setAttribute('title','左右拖动调整标题显示宽度（当前 '+SESS_W+'px），双击恢复默认');
-  });
 }
-function saveSessW(){ try{ localStorage.setItem('dsh_sess_w',String(SESS_W)); }catch(e){} }
+// 写「上次实际宽度」；第二个参数 true 表示这次是人拖出来的，同时记进 USER_W_KEY。
+function saveSessW(byUser){
+  try{ localStorage.setItem(SESS_W_KEY, String(SESS_W)); }catch(e){}
+  if(byUser){
+    try{ localStorage.setItem(USER_W_KEY, String(SESS_W)); }catch(e){}
+  }
+}
 // 动态上限：标题列最多能占多宽，才不会把表格撑出所在半栏（进而顶到「月度汇总」）。
 //
-// 动态上限：标题列最多能占多宽，才不会把表格撑出所在半栏（进而顶到「月度汇总」）。
 // 只减两个定宽数值列 + 输出列下限 + 标题列的非文字开销 —— 不再去量「其余各列实宽」，
 // 因为那些列宽本身就是 applySessW() 按这里算出的上限写下去的，量回来会形成循环依赖。
+function calSessCap(avail){
+  var lim=avail-SESS_REQ_W-SESS_TOTAL_W-SESS_OUT_MIN-SESS_COL_EXTRA-2;
+  if(lim<SESS_W_FIT_MIN) lim=SESS_W_FIT_MIN;
+  return Math.min(Math.round(lim),SESS_W_MAX);
+}
 function sessWLimit(){
   var tbl=document.getElementById('tblSess');
   if(!tbl || !tbl.offsetParent) return SESS_W_MAX;
   var sc=tbl.parentNode;
   if(!sc || !sc.clientWidth) return SESS_W_MAX;
-  var lim=sc.clientWidth-SESS_REQ_W-SESS_TOTAL_W-SESS_OUT_MIN-SESS_COL_EXTRA-2;
-  if(lim<SESS_W_FIT_MIN) lim=SESS_W_FIT_MIN;
-  return Math.min(Math.round(lim),SESS_W_MAX);
+  return calSessCap(sc.clientWidth);
 }
 function clampSessWToFit(){
   if(SESS_DRAG) return;
-  var lim=sessWLimit();
-  if(lim<SESS_W_MAX && SESS_W>lim){ SESS_W=lim; applySessW(); saveSessW(); }
+  // 宽度裁决统一放在 applySessW() 里（它会同时考虑「容器上限」与「整行标题放得下」），
+  // 这里只负责在容器尺寸变化后重新跑一遍。
+  applySessW();
 }
 // 表头把手：mousedown 起拖 → document 上跟手 → mouseup 收尾并持久化。
 // 委托挂在 document 上，因此表格每 30 秒 innerHTML 重建、把手被换掉，都不影响拖拽。
@@ -458,7 +575,7 @@ function initSessGrip(){
     var g=e.target&&e.target.closest?e.target.closest('.sessgrip'):null;
     if(!g) return;
     if(e.preventDefault) e.preventDefault();
-    SESS_DRAG=true; g.classList.add('on');
+    SESS_DRAG=true; SESS_USER_SET=true; g.classList.add('on');
     var x0=e.clientX, w0=SESS_W;
     var wMax=sessWLimit();
     function mm(ev){
@@ -470,7 +587,7 @@ function initSessGrip(){
       document.removeEventListener('mouseup',mu);
       SESS_DRAG=false;
       document.querySelectorAll('.sessgrip').forEach(function(x){ x.classList.remove('on'); });
-      saveSessW();
+      saveSessW(true);
     }
     document.addEventListener('mousemove',mm);
     document.addEventListener('mouseup',mu);
@@ -478,19 +595,40 @@ function initSessGrip(){
   document.addEventListener('dblclick',function(e){
     var g=e.target&&e.target.closest?e.target.closest('.sessgrip'):null;
     if(!g) return;
-    SESS_W=SESS_W_DEF; applySessW(); saveSessW();
+    SESS_W=SESS_W_DEF; SESS_USER_SET=false;
+    try{ localStorage.removeItem(USER_W_KEY); }catch(e){}
+    applySessW(); saveSessW();
   });
 }
 function isHourMode(){ return RANGE==='today' || RANGE==='yday' || !!pickedDay(); }
-function todayDate(){
-  return DATA && DATA.days.length ? DATA.days[DATA.days.length-1].date : null;
+// 日历口径（2026-11-03 改）：'today' / 'yday' 落到**系统日历**的今天 / 昨天，不再取
+// 「数据里最新的一天」。
+//
+// 为什么改：旧口径下，当天第一笔请求还没落进会话转录的那段时间里，「今日」会顶着今天的
+// 名字显示**昨天**的数字。用户实际遇到：11-03 早上第一次开会话，看板「今日总词元」显示
+// 388.4M，而那是 11-02 的用量（快照时间 08:39，第一条 11-03 记录 08:40:49 才落盘）。
+// 数字本身没算错，是标签在骗人 —— 这种误读比显示「今日暂无请求」更糟。
+//
+// 现在今天没有数据时，单日视图走明确空态，并点名「最近有数据的一天」是哪天、多少词元，
+// 既不冒充今天，也不会让人对着 24 行 0 猜是不是坏了。
+function pad2(n){ return (n<10 ? '0' : '') + n; }
+function calDay(off){
+  var d=new Date();
+  if(off) d.setDate(d.getDate()+off);
+  return d.getFullYear()+'-'+pad2(d.getMonth()+1)+'-'+pad2(d.getDate());
 }
-// 「昨日」与「今日」同一口径：都以**数据里最新的一天**为锚，不看系统时钟。
-// 不取「日历昨天」是因为跨越零点、或当天还没产生请求时，日历口径会落到一个
-// 数据里根本没有的日期上（页面会显示成「昨日 无任何请求记录」）。只有一个日期时返回 null。
-function ydayDate(){
+function todayDate(){ return calDay(0); }
+function ydayDate(){ return calDay(-1); }
+// 数据锚点：数据里最新的一天。**只用于空态提示**（「最近有数据的一天」），不再充当「今日」。
+function latestDate(){
   var ds=DATA&&DATA.days?DATA.days:[];
-  return ds.length>1 ? ds[ds.length-2].date : null;
+  return ds.length?ds[ds.length-1].date:null;
+}
+function dayRow(date){
+  if(!date) return null;
+  var ds=DATA&&DATA.days?DATA.days:[];
+  for(var i=0;i<ds.length;i++){ if(ds[i].date===date) return ds[i]; }
+  return null;
 }
 // 单日视图的统一取日：'today' / 'yday' / 'day:YYYY-MM-DD' 三种都收敛到这里
 function dayOf(range){
@@ -523,10 +661,11 @@ function rangeLabel(){
 function dayShort(){ return RANGE==='today'?'今日':(RANGE==='yday'?'昨日':'当日'); }
 function sliceDays(){
   var ds=DATA.days;
-  if(RANGE==='today') return ds.length?[ds[ds.length-1]]:[];
-  if(RANGE==='yday'){
-    var yd=ydayDate();
-    return yd ? ds.filter(function(x){ return x.date===yd; }) : [];
+  // 日历口径：今日/昨日都**按日期过滤**，取不到就是空数组（走空态），
+  // 不再拿「数据里最新的一天」顶上 —— 那会把昨天的数字挂到今天的名下。
+  if(RANGE==='today'||RANGE==='yday'){
+    var dd=dayOf(RANGE);
+    return ds.filter(function(x){ return x.date===dd; });
   }
   var d=pickedDay();
   if(d) return ds.filter(function(x){ return x.date===d; });
@@ -556,9 +695,10 @@ function hoursOf(d){
   return out;
 }
 function todayHours(){ return hoursOf(focusDate()); }
-// 单日视图的小时行：无日期（如「昨日」但数据只有一天）时返回空表而不是造 24 行假零，
-// 让卡片、图表、明细表都走各自的空态分支，而不是显示一整屏 0。
-function dayHours(){ return focusDate() ? todayHours() : []; }
+// 单日视图的小时行：这一天**确实有数据**才返回 24 行，否则返回空表。
+// 日历口径下 focusDate() 一定是个日期，所以判断依据从「有没有日期」换成「这天有没有数据」——
+// 不然今天还没开始用的时候，明细表会铺满 24 行假零，看着像数据丢了。
+function dayHours(){ return dayRow(focusDate()) ? todayHours() : []; }
 function hourLabel(h){ return h+':00'; }
 
 function renderCards(){
@@ -574,17 +714,28 @@ function renderCards(){
     // 三种单日视图的措辞：今日 / 昨日 / 自选某天（当日）
     var dl=dayShort();
     if(!last.date){
-      var emptyHint=(cd||'所选日期')+' 无任何请求记录';
-      if(!cd && RANGE==='yday') emptyHint='数据里只有一天，没有更早的日期；请改用「自选某天」';
+      // 空态。日历口径下「今天还没请求」「昨天没请求」「那天没请求」都是正常状态，
+      // 必须说清是哪天没数据，并点名**最近有数据的一天**，免得用户对着空白以为坏了。
+      var emptyHint=cd?('日历 '+cd+' 无任何请求记录'):'无任何请求记录';
+      var nd=latestDate(), ndRow=dayRow(nd);
+      if(nd && nd!==cd){
+        emptyHint+='；最近有数据的一天是 '+nd+
+          (ndRow?('（'+Mlabel(ndRow.total)+' 词元）'):'')+'，可点「自选某天」查看';
+      } else if(nd===cd){
+        emptyHint=cd+' 暂无请求记录';
+      }
       cards.push([dl+'数据', '—', emptyHint]);
+      // 空态也给一张「最近一天」的卡片：一行就能看出看板还活着、数字在哪天。
+      if(nd && nd!==cd && ndRow){
+        cards.push(['最近一天 '+nd.slice(5), Mlabel(ndRow.total), fmt(ndRow.total)+' 词元　共 '+fmt(ndRow.req)+' 次请求']);
+      }
     } else {
-      var idx=-1;
-      DATA.days.forEach(function(x,i){ if(x.date===cd) idx=i; });
-      var prev = idx>0 ? DATA.days[idx-1] : null;
+      // 「较上一天」按**日历前一天**取（与「今日/昨日」同口径），
+      // 不再用「数据数组里紧邻的那一行」—— 中间断了几天时会拿一周前的数字当「昨日」比。
+      var prev = dayRow(calDay(RANGE==='today'?-1:-2));
       var hint=fmt(last.total)+' 词元';
       if(prev && prev.total){
         var delta=(last.total-prev.total)/prev.total*100;
-        // 今日比「昨日」，昨日则比「前一日」——两者都取数据里紧邻的上一天，口径一致
         hint+='　'+(RANGE==='today'?'较昨日':('较 '+prev.date.slice(5)))+' '+(delta>=0?'+':'')+delta.toFixed(0)+'%';
       }
       cards.push([dl+'总词元', Mlabel(last.total), hint]);
@@ -598,15 +749,19 @@ function renderCards(){
         last.req?('平均每次 '+fmt(Math.round(last.total/last.req))+' 词元'):'']);
     }
   } else {
-    var lastD=DATA.days[DATA.days.length-1], prevD=DATA.days[DATA.days.length-2];
+    // 多天视图顶部的「今日 / 昨日」两张卡：口径与单日视图一致，走**日历**，
+    // 不再取数据数组的最后两行（-- 数据里最后一行不一定是今天）。
+    var lastD=dayRow(todayDate()), prevD=dayRow(ydayDate());
     if(pickedSpan() && !cnt){
       cards.push(['区间内数据', '—', rangeLabel()+' 无任何请求记录']);
     } else {
       if(pickedSpan()){
         cards.push(['区间总词元', Mlabel(total), rangeLabel()+'　共 '+cnt+' 天']);
       } else {
-        if(lastD) cards.push(['今日词元', Mlabel(lastD.total), fmt(lastD.total)+' 词元']);
-        if(prevD) cards.push(['昨日词元', Mlabel(prevD.total), fmt(prevD.total)+' 词元']);
+        cards.push(['今日词元', lastD?Mlabel(lastD.total):'—',
+          lastD?fmt(lastD.total)+' 词元':(todayDate()+' 暂无请求记录')]);
+        cards.push(['昨日词元', prevD?Mlabel(prevD.total):'—',
+          prevD?fmt(prevD.total)+' 词元':(ydayDate()+' 无请求记录')]);
       }
       cards.push(['范围日均', Mlabel(total/n), '按 '+n+' 天计']);
       // 多天视图的词元四分量：总词元 = 缓存命中 + 未缓存输入 + 缓存写入 + 输出。
@@ -646,6 +801,27 @@ function renderChart(){
   var n=rows.length||1;
   var ybox=document.getElementById('yaxis');
   var box=document.getElementById('chart');
+  // 空态：这一天/这段区间根本没有数据。以前会画一张「有网格、有坐标轴、没有柱子」的图，
+  // 配上纵轴 0.000M 的刻度，看起来像图表渲染坏了；直接给一句说明更准确。
+  if(!rows.length){
+    var cd0=focusDate(), nd0=latestDate();
+    var l1=esc(cd0 ? (cd0+' 无任何请求记录') : '所选范围无任何请求记录');
+    var l2=(nd0 && nd0!==cd0) ? ('<div style="margin-top:2px">最近有数据的一天是 <b>'+esc(nd0)+'</b></div>') : '';
+    box.innerHTML='<div style="height:224px;display:flex;flex-direction:column;align-items:center;'+
+      'justify-content:center;color:#8b93a0;font-size:13px;text-align:center;line-height:1.9">'+
+      '<div>'+l1+'</div>'+l2+'</div>';
+    ybox.innerHTML='';
+    CHART_GEO=null;
+    document.getElementById('chartTitle').innerHTML=
+      (hm?(dayShort()+'分时词元构成'):'每日词元构成')+
+      ' <small id="chartNote">（'+esc(cd0||rangeLabel())+' 无请求记录）</small>';
+    // 说明栏也要跟着换成空态文案，否则会留着上一次范围的那段注解。
+    document.getElementById('chartNoteBox').innerHTML=
+      '这一天没有任何 API 请求，所以图上没有柱子。'+
+      (nd0 && nd0!==cd0?('看最近的数据请点「昨日」或「自选某天」选 '+esc(nd0)+'。'):'')+
+      '（看板按<b>系统日历</b>决定「今日/昨日」，不取数据里最后一天。）';
+    return;
+  }
   // 滚动位置必须在这里读干净：下面重设 innerHTML 后 scrollLeft 会被钳回 0，事后再读就晚了。
   var prevSL=box.scrollLeft, prevSW=box.scrollWidth;
   // Y 轴在滚动容器之外，所以先把左列的宽定死、再量绘图区的可用宽。
@@ -735,10 +911,16 @@ function renderChart(){
   var cd=focusDate(), sp=pickedSpan();
   var noteTxt;
   if(hm){
-    // 「昨日」在只有一天数据时锁定不到日期（ydayDate 返回 null），这里说清楚原因，
-    // 而不是显示一根没有日期的小时图
-    noteTxt=cd ? (cd+' 共 24 小时')
-               : (RANGE==='yday' ? '数据里只有一天，暂无昨日' : '无数据');
+    // 日历口径下「今天」永远是有效日期，所以不再有「锁定不到日期」这种情况；
+    // 但这一天可能真的没有任何请求（今天还没开始用、或昨天没用），要在标题里说清楚，
+    // 不然 24 根 0 高的柱子看起来像渲染坏了。
+    var hr=dayRow(cd), isEmpty=!(hr && hr.req>0);
+    if(!cd) noteTxt='无数据';
+    else if(isEmpty){
+      var nd=latestDate();
+      noteTxt=cd+' 无请求记录'+(nd&&nd!==cd?('，最近有数据的是 '+nd):'');
+    }
+    else noteTxt=cd+' 共 24 小时';
   }
   else if(sp){ noteTxt=sp.from.slice(5)+' ~ '+sp.to.slice(5)+'，'+rows.length+' 天'+(n>vd?'，可横向拖动':''); }
   else { noteTxt=n+' 天'+(n>vd?'，可横向拖动':''); }
@@ -807,6 +989,14 @@ function renderDaily(){
   });
   html+='</tbody>';
   var t=document.getElementById('tblDaily');
+  // 空表时补一行说明：日历口径下「今天还没请求」是常态，直接给一张只有表头的空表
+  // 会让人以为表格没渲染出来。
+  if(!rows.length){
+    html+='<tbody><tr><td colspan="'+(cols.length+1)+'" style="color:#8b93a0;text-align:center;padding:18px 8px">'+
+      esc(focusDate()||rangeLabel())+' 无任何请求记录'+
+      (latestDate()&&latestDate()!==focusDate()?('（最近有数据的是 '+latestDate()+'）'):'')+
+      '</td></tr></tbody>';
+  }
   t.innerHTML=html;
   var extra=(pickedDay()||pickedSpan()) ? (rangeLabel()+' · ') : '';
   // 今日 / 昨日这两种相对视图也把落到的具体日期写进小字，避免「昨日」到底是哪天要靠猜
@@ -879,6 +1069,10 @@ function renderModels(){
       '<td>'+(x.total/sum*100).toFixed(1)+'%</td></tr>';
   });
   html+='</tbody>';
+  if(!list.length){
+    html+='<tbody><tr><td colspan="'+modelCols().length+'" style="color:#8b93a0;text-align:center;padding:18px 8px">'+
+      esc(focusDate()||rangeLabel())+' 无任何模型调用记录</td></tr></tbody>';
+  }
   var tm=document.getElementById('tblModel');
   tm.innerHTML=html;
   document.getElementById('mNote').textContent=note;
@@ -922,6 +1116,7 @@ function sessRows(){
 }
 function renderSessions(){
   if(SESS_DRAG) return;   // 拖动列宽时别重建表头，否则把手会闪断
+  // 新一批标题会改变缓存键，sessFitW() 自己会重算，这里不必清空
   // colgroup：固定布局下由它决定列宽（见 CSS 的 #tblSess{table-layout:fixed}）。
   // 必须和 sessCols() 一一对应，顺序错了整张表就错位。
   var colCls=['c-sess','c-req','c-total','c-out'];   // 与 CSS 里的 col 宽一一对应
@@ -989,19 +1184,28 @@ function renderSessions(){
 
 // 月度汇总的列定义与取行：顺序即表头顺序，键名同时是排序键（与 th 的 data-k 对应）。
 // 后端已直接下发 fresh / cached / cwrite / output / total，不必再从前端做减法。
+// 'hit' 是派生列（缓存命中率），与模型分布 / 明细表同一口径：
+//   cached ÷ 输入合计（fresh + cached + cwrite），分母为 0 时显示「—」。
+// 它是行上的计算字段（monthRows 里现算），不参与「取整月原始字段」那套。
 function monthCols(){
   return [['month','月份'],['req','请求数'],['fresh','未缓存输入'],['cached','缓存命中'],
-          ['cwrite','缓存写入'],['output','输出'],['total','总词元']];
+          ['cwrite','缓存写入'],['hit','缓存命中率'],['output','输出'],['total','总词元']];
 }
 function monthRows(){
   var rows=DATA.months.map(function(m){
-    return {month:m.month, req:m.req, fresh:m.fresh||0, cached:m.cached||0,
-            cwrite:m.cwrite||0, output:m.output||0, total:m.total||0};
+    var fresh=m.fresh||0, cached=m.cached||0, cwrite=m.cwrite||0;
+    return {month:m.month, req:m.req, fresh:fresh, cached:cached, cwrite:cwrite,
+            output:m.output||0, total:m.total||0,
+            // 分母用「计费输入合计」，与卡片上的「缓存命中率」完全同口径；
+            // 用 total 当分母会把输出也算进去，命中率会被稀释
+            inputTotal:fresh+cached+cwrite,
+            hit:hitPct(cached, fresh+cached+cwrite)};
   });
   rows.sort(function(a,b){
     var x=a[MSORT.k], y=b[MSORT.k];
     if(typeof x==='string'){ return MSORT.d*(x<y?-1:x>y?1:0); }
     // 数值列用 (x||0)：某列可能整月为 0 或缺失，不能让它变 NaN 把排序打乱
+    // hit 的 null（分母为 0）在这里被当成 0 参与排序，显示仍是「—」
     return MSORT.d*((x||0)-(y||0));
   });
   return rows;
@@ -1016,6 +1220,8 @@ function renderMonths(){
       '</td><td title="'+fmt(m.fresh)+' 词元">'+Mx(m.fresh)+'</td>'+
       '<td title="'+fmt(m.cached)+' 词元">'+Mx(m.cached)+'</td>'+
       '<td title="'+fmt(m.cwrite)+' 词元">'+Mx(m.cwrite)+'</td>'+
+      '<td title="命中 '+fmt(m.cached)+' ／ 输入合计 '+fmt(m.inputTotal)+
+        '（未缓存输入 + 缓存命中 + 缓存写入）">'+pctCell(m.hit)+'</td>'+
       '<td title="'+fmt(m.output)+' 词元">'+Mx(m.output)+'</td>'+
       '<td title="'+fmt(m.total)+' 词元"><b>'+Mx(m.total)+'</b></td></tr>';
   });
