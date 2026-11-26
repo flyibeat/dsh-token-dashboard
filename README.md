@@ -17,9 +17,9 @@ start.cmd/.sh     ← 一键启动
 | 特性 | 说明 |
 |---|---|
 | **零依赖** | Python 侧只用标准库（`http.server` / `json` / `collections`）。zstd 解压走四级降级，见下文 |
-| **增量扫描** | 按 `[mtime, size]` 签名缓存，只重解析变动的文件。首次全量约 1 秒，之后近乎瞬时 |
+| **增量扫描** | 按 `[mtime, size]` 签名缓存，只重解析变动的文件；首次全量耗时随日志体积增长，后续复用解析缓存 |
 | **前端热加载** | `dashboard.html` 是独立文件。改完存盘即可，页面 30 秒内自动重载，不用重启后端 |
-| **只读且克制** | **从不读取会话正文**，只取用量计数、供应商/模型名、标题与工作目录 |
+| **只读且克制** | 不存储或展示会话正文；带用量的完整事件仅在内存生成判重摘要，缓存只保留计数、来源、摘要与继承标记 |
 | **跨平台** | Windows / macOS / Linux 通用。数据根四级 fallback，以服务 / 计划任务等非交互身份运行也能自动定位 |
 | **可打包** | 一条命令打成单文件 exe |
 | **默认只听本机** | 默认绑定 `127.0.0.1`，不对外暴露 |
@@ -45,13 +45,13 @@ python usage_server.py
 
 | 来源 | 用途 | 取哪些字段 |
 |---|---|---|
-| `sessions/<工作区>/<会话ID>/session.v<N>.jsonl.zstd` | 逐条累计用量 | 只取 `assistant/message` 事件的 `data.usage`（`inputTokens` / `outputTokens` / `cacheReadTokens` / `cacheWriteTokens`）、`data.message.source`（`provider` / `model`）、`time` |
+| `sessions/<工作区>/<会话ID>/session.v<N>.jsonl.zstd` | 解析用量并识别继承副本 | 用量四桶、供应商/模型、时间；完整 `assistant/message` 的 SHA-256；会话 `isSeeded` 及 `session/end-seed.data.inherited` |
 | `storages/session_projcache/sessions/<会话ID>.json` | 补会话标题与工作目录 | `record.rows.title.val`、`record.identity.cwd`。**不读 `titleInput` 等含正文的键** |
 
 不需要装任何插件，也不读取第三方插件的任何文件。
 
-> **缓存里存什么**：`scan-cache.json` 只存 `{绝对路径: {"sig": [mtime, size], "recs": [[数字…]]}}` ——
-> 纯数字数组，**连会话标题与 cwd 都不落盘**。
+> **缓存里存什么**：`scan-cache.json` 的 v2 缓存按文件保存签名、用量与来源、完整事件的 SHA-256 摘要、继承标记和异常计数。
+> **不保存会话正文、标题或 cwd 元数据**；旧版缓存自动失效并重建。原始解析记录全部保留，汇总时才消除重复。
 
 ### 数据根定位（四级 fallback）
 
@@ -133,8 +133,8 @@ dsh 把会话事件流写成 `session.v<N>.jsonl.zstd`。两点注意：
 | 路径 | 说明 |
 |---|---|
 | `GET /` | 看板页面。优先用程序目录下的 `dashboard.html`，没有则用内嵌副本 |
-| `GET /api/data` | 完整聚合数据（`days` / `months` / `models` / `sessions` / `hours` / `recordCount` / `source` / `span` / `summary` / `htmlMtime` / `serverVersion`）。带 `?force=1` 触发立即重扫 |
-| `GET /api/health` | 运行状态（`records` / `files` / `error` / `scanSeconds` / `dataRoot` / `dataRootSource` / `zstdBackend` / `sessionMetaOk` / `version`） |
+| `GET /api/data` | 完整聚合数据（`days` / `months` / `models` / `sessions` / `hours` / `recordCount` / `source` / `span` / `htmlMtime` / `serverVersion` / `cacheVersion` / `deduplicated`）。带 `?force=1` 触发立即重扫 |
+| `GET /api/health` | 运行状态（`records` / `files` / `error` / `scanSeconds` / `dataRoot` / `dataRootSource` / `zstdBackend` / `sessionMetaOk` / `version` / `cacheVersion` / `deduplicated`） |
 
 **没有内置鉴权。** 安全性依赖默认只绑 `127.0.0.1`。若要对外提供，请在前面套一层带鉴权的反向代理。
 
@@ -171,17 +171,31 @@ dsh 的会话目录里可能同时留着 `session.v3.jsonl.zstd` 和 `session.v4
 它们是**同一次会话在不同格式版本下的副本**，不是两段用量。程序对每个会话目录只取
 版本号最高的那份。本机 39 个会话目录里有 1 个同时有 v3+v4，不去重就会重复累加。
 
+### 跨会话继承历史只计一次
+
+带种子的会话可能原样复制父会话的历史用量。程序同时确认 `isSeeded:true` 和
+`session/end-seed` 的 `data.inherited:true`，标记继承区，再按完整事件的规范化 JSON 摘要匹配。
+它**不会仅凭时间戳或词元数相同就合并请求**，也不会把结束标记之前的所有历史直接丢掉。
+
+- 原调用存在：继承副本不再计入，归属原会话；派生会话后来新产生的调用照常累计。
+- 原调用缺失：保留一份继承记录，避免仅存的真实用量丢失。
+- 多重继承：相同继承事件仍只保留一次；普通会话的调用不擅自合并。
+- 每轮扫描都重新选择归属；父会话消失或重新出现时，缓存不会固化错误的去重结果。
+
+`deduplicated.records` 和 `deduplicated.tokens` 分别是本次全库快照剔除的重复记录数与词元数。
+所有聚合维度都使用去重后的记录，日期仍按原事件时间归属。
+
 ## 口径怎么自证
 
 不靠「我觉得」。三条硬约束是代码里的不变量，可以自己验：
 
 1. **四个词元桶之和恒等于 `total`** —— `fresh + cached + cwrite + output == total`；
 2. **天／模型／月三个维度的总量互相一致** —— 同一批记录按三种方式聚合，总和必须相等；
-3. **独立旁证**：dsh 自己在 `storages/session_projcache/sessions/<会话ID>.json` 的
-   `record.rows.tokenUsage.val.totals` 里存了每会话用量（由 dsh 的 `dsh-token-meter` 折出来，
-   和本项目的解析代码毫无关系），拿它逐会话比一遍即可确认读法正确。
+3. **回到原始事件核验**：父子会话的复制段按完整事件逐条核对，确认同一次调用只计一次；
+   同时测试原会话缺失、多重继承、相似但不同调用，以及冷扫/热扫一致性。
 
-第 3 条的比对在本机做过：34 个会话**全部 0 差**。
+dsh 投影缓存和第三方实时用量插件只能作旁证；共享同一批转录或存在观察窗口差异时，
+数值相等并不足以证明实际调用量正确。
 
 ## 关于打包
 

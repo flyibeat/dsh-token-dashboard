@@ -41,6 +41,7 @@ import time
 import threading
 import datetime
 import collections
+import hashlib
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse
 
@@ -250,7 +251,8 @@ LOG_PATH = os.path.join(APPDIR, 'server.log')
 # 没有这道闸门时，改了取值口径、重启后数字一动不动 —— 因为缓存里存的是
 # **上次解析出来的结果**，文件签名没变就不会重解析。
 #   v1：初版。会话按「目录取最高版本」+ 取 assistant/message 的 usage。
-CACHE_VER = 1
+#   v2：完整事件指纹 + 已确认的继承标记；汇总时去掉跨会话继承副本。
+CACHE_VER = 2
 
 PORT = int(os.environ.get('DSH_USAGE_PORT', '8793'))
 BIND = os.environ.get('DSH_USAGE_BIND', '127.0.0.1')
@@ -450,29 +452,39 @@ def find_session_logs():
     return [best[k][1] for k in sorted(best)]
 
 
-def parse_file(text):
-    """解析单个会话日志（已解压的文本），返回 (记录列表, 被跳过的脏记录数)。
+def parse_file(text, with_identity=False):
+    """解析单个日志，返回 (记录列表, 被跳过的脏记录数)。
 
-    跳过策略统一为「一坏只跳这一条，其余照常」。每个取值都可能是脏数据 ——
-    timestamp 比较、model 当字典键这两处同样会炸，所以一并放进同一条保护里。
-
-    为什么值得这层保护：异常会一路冒到 build() 的 except，那里只置 _STATE['error']、
-    保留上一次的数据，于是看板**永久停在旧数据**上；更麻烦的是 save_cache() 排在
-    scan() 之后根本走不到，缓存永不再落盘，每分钟全量重解析一遍。
+    默认保持原来的七列接口；扫描缓存额外保存完整事件的 SHA-256 指纹和
+    已确认的继承区标记，不保存消息正文。继承记录先保留，跨文件汇总时再判重：
+    原会话不在时，继承副本可能是一次真实调用唯一留存的记录。
     """
     recs = []
     bad = 0
+    is_seeded = False
+    seed_end = None
     for line in text.splitlines():
-        # 快筛：绝大多数事件（tool/result 之类）没有 usage，先按字面量掉。
-        # **只筛 "usage"，不筛 "source"** —— source 是可选字段，缺失时要用
-        # 「未知供应商/模型」兜底，筛掉它会把这类记录整条漏掉（自检里就踩到过）。
-        if '"usage"' not in line:
+        # 元数据也必须按 JSON 顶层 type 判断，不能命中正文里的同名字符串。
+        if ('"usage"' not in line and '"session"' not in line
+                and '"session/end-seed"' not in line):
             continue
         try:
             o = json.loads(line)
         except Exception:
             continue
-        if o.get('type') != 'assistant/message':
+        if not isinstance(o, dict):
+            continue
+        typ = o.get('type')
+        if typ == 'session':
+            is_seeded = o.get('isSeeded') is True
+            continue
+        if typ == 'session/end-seed':
+            d = o.get('data')
+            if isinstance(d, dict) and d.get('inherited') is True:
+                # 嵌套派生时，最外层复制段的结束标记在最后。
+                seed_end = len(recs)
+            continue
+        if typ != 'assistant/message':
             continue
         d = o.get('data')
         if not isinstance(d, dict):
@@ -493,12 +505,8 @@ def parse_file(text):
             bad += 1
             continue
         if not ts:
-            continue                        # 没有时间戳 ≠ 脏数据，只是不参与统计
-        # 秒 / 毫秒自适应。阈值取 1e11 而不是 1e12：
-        #   秒级时间戳现在约 1.8e9，要到公元 5138 年才够 1e11；
-        #   毫秒级现在是 1.8e12，远大于 1e11。
-        # 用 1e12 当阈值会把**当前**的毫秒值误判成秒 —— 测试里就踩到了：
-        # 1792248100004 被除以 1000 后落到 1970 年，记录看着「解析成功」其实日期全错。
+            continue
+        # datetime.fromtimestamp() 接收秒；日志的 epoch 毫秒先除以 1000。
         if ts > 1e11:
             ts = ts / 1000.0
         inp = _num(u.get('inputTokens'), int)
@@ -508,9 +516,44 @@ def parse_file(text):
         if inp is None or out is None or cached is None or cwrite is None:
             bad += 1
             continue
-        recs.append([ts, provider or '未知供应商', model or '未知模型',
-                     inp, out, cached, cwrite])
+        rec = [ts, provider or '未知供应商', model or '未知模型',
+               inp, out, cached, cwrite]
+        if with_identity:
+            # 同时间/同词元不等于同一次调用；完整事件还含 seq、消息与来源。
+            payload = json.dumps(o, sort_keys=True, ensure_ascii=False,
+                                 separators=(',', ':')).encode('utf-8')
+            rec.extend([hashlib.sha256(payload).hexdigest(), False])
+        recs.append(rec)
+    if with_identity and is_seeded and seed_end is not None:
+        for rec in recs[:seed_end]:
+            rec[8] = True
     return recs, bad
+
+
+def deduplicate_records(cache):
+    """只合并已确认继承的相同完整事件，不合并普通会话的相似调用。
+
+    缓存保留全部记录，每轮重新选择归属；有原调用时优先归给原会话，只有
+    继承副本时按路径顺序保留一份。删除/重新出现父会话均不会丢掉仅存用量。
+    """
+    records = []
+    originals = set()
+    inherited = {}
+    for fp in sorted(cache):
+        sid = os.path.basename(os.path.dirname(fp))
+        for rec in cache[fp]['recs']:
+            row = (sid,) + tuple(rec[:7])
+            fingerprint, is_inherited = rec[7:9]
+            if is_inherited:
+                inherited.setdefault(fingerprint, row)
+            else:
+                # 即使两条普通调用的完整内容恰好相同，也不擅自合并。
+                originals.add(fingerprint)
+                records.append(row)
+    for fingerprint, row in inherited.items():
+        if fingerprint not in originals:
+            records.append(row)
+    return records
 
 
 def load_cache():
@@ -557,7 +600,11 @@ def scan(cache):
             continue
         sig = [int(st.st_mtime), int(st.st_size)]
         ent = cache.get(fp)
-        if ent and list(ent.get('sig') or []) == sig:
+        if (ent and list(ent.get('sig') or []) == sig
+                and isinstance(ent.get('recs'), list)
+                and all(isinstance(r, list) and len(r) == 9
+                        and isinstance(r[7], str) and len(r[7]) == 64
+                        and isinstance(r[8], bool) for r in ent['recs'])):
             # 签名没变：直接复用上次解析结果
             new_cache[fp] = {'sig': sig, 'recs': ent.get('recs') or [],
                              'bad': int(ent.get('bad') or 0)}
@@ -584,7 +631,7 @@ def scan(cache):
             raise RuntimeError('zstd 解压不可用，无法读取会话日志：%s' % e)
         for fp, blobs in decoded.items():
             text = blobs.decode('utf-8', 'replace')
-            recs, nbad = parse_file(text)
+            recs, nbad = parse_file(text, with_identity=True)
             ent = new_cache.get(fp)
             if ent is not None:
                 ent['recs'] = recs
@@ -595,9 +642,7 @@ def scan(cache):
         if ent.get('recs') is None:      # 读失败没补上：这轮先不算它
             ent['recs'] = []
         bad += int(ent.get('bad') or 0)
-        sid = os.path.basename(os.path.dirname(fp))
-        for r in ent['recs']:
-            records.append((sid,) + tuple(r))
+    records = deduplicate_records(new_cache)
     return new_cache, records, parsed, bad
 
 
@@ -760,6 +805,12 @@ def build(force_full=False):
             if parsed or len(new_cache) != len(cache):
                 save_cache(new_cache)
             data = agg(records)
+            raw_records = [r for ent in new_cache.values() for r in ent['recs']]
+            data['deduplicated'] = {
+                'records': len(raw_records) - len(records),
+                'tokens': (sum(sum(r[3:7]) for r in raw_records)
+                           - sum(sum(r[4:8]) for r in records)),
+            }
             with _LOCK:
                 _STATE.update({
                     'data': data,
@@ -907,6 +958,7 @@ class Handler(BaseHTTPRequestHandler):
             out['parseSkipped'] = skipped
             out['htmlMtime'] = html_mtime()
             out['serverVersion'] = BE_VER
+            out['cacheVersion'] = CACHE_VER
             self._send(200, json.dumps(out, ensure_ascii=False), 'application/json; charset=utf-8')
             return
         if path == '/api/health':
@@ -916,6 +968,8 @@ class Handler(BaseHTTPRequestHandler):
                       'scanSeconds': _STATE['scan_seconds'], 'building': _STATE['building'],
                       'parseSkipped': _STATE['skipped'],
                       'version': BE_VER,
+                      'cacheVersion': CACHE_VER,
+                      'deduplicated': (_STATE['data'] or {}).get('deduplicated'),
                       'dataRoot': DSH if _is_loopback(BIND) else os.path.basename(DSH),
                       'dataRootSource': DSH_SOURCE,
                       'zstdBackend': zstd_bridge.describe(),
